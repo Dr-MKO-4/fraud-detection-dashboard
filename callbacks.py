@@ -42,7 +42,7 @@ ACCENT = "#0F6FB8"
 DANGER = "#C2334D"
 OK     = "#2F7D5B"
 WARN   = "#C9A227"
-LINE   = "#EDECE6"
+LINE   = "#EEF0F4"
 
 _BADGE_BASE: dict = {
     "display": "inline-block", "padding": "6px 12px", "color": "#fff",
@@ -491,13 +491,12 @@ _drift_tab_cache: dict = {"version": -1, "fig": None}
 #
 # « Compte inspecté » : le compte dont la fenêtre alimente la jauge, les
 # contributions et la vue Fenêtres. C'est le compte saisi par l'utilisateur
-# s'il est actif dans le flux ; sinon le compte au score le plus élevé du
-# dernier lot, conservé quelques ticks (sinon la vue changerait de compte à
-# chaque seconde et paraîtrait instable).
+# s'il est actif dans le flux ; sinon le dernier compte scoré du cycle (alerté
+# ou non) : la jauge suit la cadence de scoring choisie. Un compte saisi ne
+# transige que rarement (~0,01 tx/step) : tant qu'il n'est pas dans le lot, sa
+# fenêtre et donc son score n'ont pas changé, la jauge reste figée.
 
-_inspect: dict = {"acct": None, "until": 0}
-_tick_no = 0
-_INSPECT_STICKY_TICKS = 10
+_inspect: dict = {"acct": None}
 
 
 _recent_accts: "OrderedDict[str, None]" = OrderedDict()   # comptes des derniers lots (LRU)
@@ -554,21 +553,34 @@ def _fmt_int(n: int) -> str:
 
 # ── Logique de scoring partagée ───────────────────────────────────────────────
 
+def _gauge(score: float | None, tau: float, acct: str, prev: dict | None, mode: str):
+    """Style de la jauge, libellé du compte, bloc verdict, parité de surlignage."""
+    prev = prev or {}
+    flash = int(prev.get("flash", 0))
+    if acct != prev.get("acct"):
+        flash = 1 - flash
+    hist = _buffer.get_scores(acct, 24) if acct else []
+    return (_fig.gauge_state(score, tau, flash=flash), acct or "aucun",
+            _fig.gauge_meta(score, tau, mode, hist), flash)
+
+
 def _process(account_id: str, features: list[float],
              journal: list, tau: float = 0.5,
              true_label: int | None = None, *,
-             window: "np.ndarray | None", level: int):
+             window: "np.ndarray | None", level: int, prev: dict | None = None):
     """
     Score d'UNE fenêtre (injection de scénario) → 14 valeurs (Outputs du
-    callback principal). Toujours pleinement expliqué (contributions).
+    callback principal) + (libellé du compte, bloc verdict de la jauge).
+    Toujours pleinement expliqué (contributions).
     """
     prog  = f"{level}/{W}"
     cells = _WINDOW_CELLS_CACHE[min(level, W)]
 
     if window is None:
-        return (_fig.gauge_figure(None, tau), _fig.contribution_figure([]), prog, cells,
+        g_style, g_acc, g_meta, _ = _gauge(None, tau, account_id, prev, "")
+        return (g_style, _fig.contribution_figure([]), prog, cells,
                 None, "", {}, no_update, account_id, prog,
-                no_update, no_update, no_update, "")
+                no_update, no_update, no_update, ""), (g_acc, g_meta)
 
     global _last_result
     _t0    = _time.perf_counter()
@@ -583,7 +595,8 @@ def _process(account_id: str, features: list[float],
     _buffer.push_score(account_id, score)
     _buffer.push_drift_score(score)
 
-    gauge = _fig.gauge_figure(score, tau, account_id)
+    gauge, g_acc, g_meta, flash = _gauge(score, tau, account_id, prev,
+                                         "après injection de scénario")
     bar   = _fig.contribution_figure(_fig.contribution_rows(result["top_features"]))
     badge_style = _BADGE_FRAUDE if verdict == "FRAUDE" else _BADGE_NORMAL
     verdict_note = f"injection de scénario · variable dominante {driver}"
@@ -600,6 +613,8 @@ def _process(account_id: str, features: list[float],
     new_journal = (list(journal or []) + [entry])[-2000:]
 
     store_result = {
+        "acct":         account_id,
+        "flash":        flash,
         "score":        score,
         "verdict":      verdict,
         "threshold":    result["threshold"],
@@ -608,18 +623,19 @@ def _process(account_id: str, features: list[float],
     return (gauge, bar, prog, cells, store_result,
             verdict, badge_style, new_journal,
             account_id, prog, no_update, no_update, f"{score * 100:.1f}%",
-            verdict_note)
+            verdict_note), (g_acc, g_meta)
 
 
 # ── Traitement du flux live (1 tick = tout ce qui est arrivé depuis le dernier) ─
 
-def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals: dict):
+def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals: dict,
+                prev: dict | None = None):
     """
     Score tout ce que le flux live a livré depuis le tick précédent, en un
     seul forward pass batché, puis explique UN compte (le compte inspecté).
     Retourne les 18 valeurs du callback principal + les compteurs cumulés.
     """
-    global _entry_id_counter, _last_result, _tick_no
+    global _entry_id_counter, _last_result
 
     accounts, batch_features, batch_meta, step_val = _live_ingest.pop_pending()
 
@@ -638,13 +654,12 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
     if not n_batch:
         if step_val is None:
             raise PreventUpdate
-        out = [no_update] * 19
+        out = [no_update] * 21
         out[13] = f"pas {step_val} · rattrapage de l'historique (échauffement)"
         out[15] = _step_to_clock(step_val)
         out[16] = f"pas {step_val} · échauffement"
         return tuple(out)
     new_batch_cursor = int(batch_cursor or 0) + 1
-    _tick_no += 1
 
     # État de session périmé (purge survenue pendant ce tick) : on repart de zéro
     if int((totals or {}).get("epoch", 0)) != _epoch:
@@ -709,45 +724,63 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
                 _fmt_int(new_totals["alerts"]), no_update,
                 f"pas {step_val} · aucune fenêtre complète pour l'instant "
                 f"(un compte est scoré à partir de {W} transactions)",
-                no_update, clock_str, cursor_str, new_batch_cursor, new_totals)
+                no_update, clock_str, cursor_str, new_batch_cursor, new_totals,
+                no_update, no_update)
 
     # ── Choix du compte inspecté ─────────────────────────────────────────────
     typed = (account_id or "").strip()
-    if typed and typed in complete:
+    if typed and _buffer.get_fill_level(typed) >= W:
         inspect_acc, auto, why = typed, False, ""
-    elif _inspect["acct"] in complete and _tick_no < _inspect["until"]:
-        # Compte conservé d'un lot précédent : ce n'est plus forcément le max du lot
-        inspect_acc, auto = _inspect["acct"], True
-        why = " (suivi automatique : score le plus élevé d'un lot précédent, conservé quelques secondes)"
     else:
-        inspect_acc, auto = acc_list[int(np.argmax(scores))], True
-        why = " (choisi automatiquement : score le plus élevé du lot)"
-        _inspect["acct"], _inspect["until"] = inspect_acc, _tick_no + _INSPECT_STICKY_TICKS
+        inspect_acc, auto = acc_list[-1], True   # ordre d'arrivée : dernier compte scoré
+        why = " (choisi automatiquement : dernier compte scoré du lot)"
+        _inspect["acct"] = inspect_acc
 
-    result = _inference.score(complete[inspect_acc], tau)   # explication complète, 1 compte
+    rescored = inspect_acc in complete
+    pct = n_alerts / n_scored * 100
+    batch_note = (f" · dernier lot : {n_alerts} alertes sur {n_scored} comptes scorés"
+                  f" ({pct:.0f} % = taux d'alerte, pas un score)")
+    level = _buffer.get_fill_level(inspect_acc)
+    new_journal = (list(journal or []) + new_entries)[-2000:]
+    tele_acc = f"{inspect_acc}{' · auto' if auto else ''}"
+
+    window = complete[inspect_acc] if rescored else None
+    if window is None and inspect_acc != (prev or {}).get("acct"):   # compte affiché côté navigateur
+        window = _buffer.get_window(inspect_acc)
+
+    if window is None:
+        return (no_update, no_update, f"{level}/{W}", _WINDOW_CELLS_CACHE[min(level, W)],
+                no_update, no_update, no_update, new_journal,
+                tele_acc, f"{level}/{W}",
+                _fmt_int(new_totals["scored"]), _fmt_int(new_totals["alerts"]),
+                no_update,
+                f"Compte inspecté {inspect_acc}{why} · aucune nouvelle transaction de ce "
+                f"compte, score inchangé{batch_note}",
+                no_update, clock_str, cursor_str, new_batch_cursor, new_totals,
+                no_update, no_update)
+
+    result = _inference.score(window, tau)   # explication complète, 1 compte
     _last_result = result
-    top_driver = result["top_features"][0]["label"] if result["top_features"] else ""
 
-    gauge = _fig.gauge_figure(result["score"], tau, inspect_acc)
+    mode = ("automatique : dernier compte scoré à chaque cycle, alerté ou non" if auto
+            else "suivi manuel")
+    gauge, g_acc, g_meta, flash = _gauge(result["score"], tau, inspect_acc, prev, mode)
     bar   = _fig.contribution_figure(_fig.contribution_rows(result["top_features"]))
     verdict_text = result["verdict"]
     badge_style  = _BADGE_FRAUDE if verdict_text == "FRAUDE" else _BADGE_NORMAL
-    pct = n_alerts / n_scored * 100
     verdict_note = (f"Compte inspecté {inspect_acc}{why}"
-                    f" · score max du lot {float(scores.max()) * 100:.1f} %"
-                    f" · dernier lot : {n_alerts} alertes sur {n_scored} comptes scorés"
-                    f" ({pct:.0f} % = taux d'alerte, pas un score)")
-    store_result = {"score": result["score"], "verdict": result["verdict"],
-                    "threshold": tau, "top_features": result["top_features"]}
+                    f" · score max du lot {float(scores.max()) * 100:.1f} %{batch_note}")
+    store_result = {"acct": inspect_acc, "flash": flash, "score": result["score"],
+                    "verdict": result["verdict"], "threshold": tau,
+                    "top_features": result["top_features"]}
 
-    level = _buffer.get_fill_level(inspect_acc)
-    new_journal = (list(journal or []) + new_entries)[-2000:]
     return (gauge, bar, f"{level}/{W}", _WINDOW_CELLS_CACHE[min(level, W)],
             store_result, verdict_text, badge_style, new_journal,
-            f"{inspect_acc}{' · auto' if auto else ''}", f"{level}/{W}",
+            tele_acc, f"{level}/{W}",
             _fmt_int(new_totals["scored"]), _fmt_int(new_totals["alerts"]),
             f"{result['score'] * 100:.1f}%", verdict_note,
-            no_update, clock_str, cursor_str, new_batch_cursor, new_totals)
+            no_update, clock_str, cursor_str, new_batch_cursor, new_totals,
+            g_acc, g_meta)
 
 
 # ── Enregistrement des callbacks ──────────────────────────────────────────────
@@ -759,7 +792,7 @@ def register_callbacks(app) -> None:
     # seul forward pass batché  les injections de scénario
     # restent transaction-par-transaction, toujours pleinement expliqués.
     @app.callback(
-        Output("graph-gauge",          "figure"),
+        Output("graph-gauge",          "style"),
         Output("graph-contributions",  "figure"),
         Output("progress-window",      "children"),
         Output("window-cells",         "children"),
@@ -778,6 +811,8 @@ def register_callbacks(app) -> None:
         Output("tele-cursor",          "children"),
         Output("store-batch-cursor",   "data"),
         Output("store-totals",         "data"),
+        Output("gauge-acc",            "children"),
+        Output("gauge-meta",           "children"),
         Input("auto-interval",         "n_intervals"),
         Input("btn-inject-ato",        "n_clicks"),
         Input("btn-inject-refund",     "n_clicks"),
@@ -791,11 +826,13 @@ def register_callbacks(app) -> None:
         State("store-journal",         "data"),
         State("store-config",          "data"),
         State("store-totals",          "data"),
+        State("store-last-result",     "data"),
         prevent_initial_call=True,
     )
     def on_tick_or_inject(n_intervals,
                           n_ato, n_refund, n_fake, n_split, n_smurf, n_anomaly,
-                          cursor, batch_cursor, account_id, journal, cfg, totals):
+                          cursor, batch_cursor, account_id, journal, cfg, totals,
+                          last_result):
         triggered  = ctx.triggered_id
         tau        = float((cfg or {}).get("tau", 0.5))
         cursor     = int(cursor or 0)
@@ -803,7 +840,8 @@ def register_callbacks(app) -> None:
         account_id = str(account_id or "").strip()   # "" = compte inspecté automatiquement
 
         if triggered == "auto-interval":
-            return _tick_batch(batch_cursor, account_id, journal, tau, totals)
+            return _tick_batch(batch_cursor, account_id, journal, tau, totals,
+                               prev=last_result)
 
         if triggered not in _SCENARIO_BTN_MAP:
             raise PreventUpdate
@@ -818,14 +856,17 @@ def register_callbacks(app) -> None:
         window     = _buffer.push(acc, features)
         level      = _buffer.get_fill_level(acc)
 
-        proc = list(_process(acc, features, journal, tau, 1, window=window, level=level))
+        proc, gauge_extra = _process(acc, features, journal, tau, 1, window=window,
+                                     level=level, prev=last_result)
+        proc = list(proc)
         verdict = proc[5]
         new_totals = (_bump_totals(totals, 1, int(verdict == "FRAUDE"), 1,
                                    int(verdict == "FRAUDE"))
                       if window is not None else (totals or {}))
         proc[10] = _fmt_int(new_totals.get("scored", 0))       # tele-count
         proc[11] = _fmt_int(new_totals.get("alerts", 0))       # tele-alerts
-        return (*proc, new_cursor, "", f"injection {new_cursor}", no_update, new_totals)
+        return (*proc, new_cursor, "", f"injection {new_cursor}", no_update, new_totals,
+                *gauge_extra)
 
     # ── 2 · Cadence de scoring → intervalle ─────────────────────────────────────
     @app.callback(

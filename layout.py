@@ -117,7 +117,7 @@ def _header() -> html.Header:
                           html.Span("SIMULÉ · BAC À SABLE", id="env-label")], className="mk-chip"),
                 html.Button("AN", id="btn-profile", n_clicks=0, title="Profil analyste",
                             style={"width": "27px", "height": "27px", "padding": 0,
-                                   "border": "1px solid #DCDBD4", "background": "#fff",
+                                   "border": "1px solid #D0D5DD", "background": "#fff",
                                    "fontFamily": "var(--mono)", "fontSize": "10.5px",
                                    "fontWeight": 600, "cursor": "pointer"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "10px", "flex": "none"}),
@@ -150,7 +150,7 @@ def _header() -> html.Header:
 # ── Vue 1 : scoring live ─────────────────────────────────────────────────────
 
 def _view_scoring() -> html.Div:
-    from .figures import gauge_figure, contribution_figure, ZONE_OK, ZONE_ALERT
+    from .figures import gauge_state, gauge_meta, contribution_figure, ZONE_OK, ZONE_ALERT
 
     # ── Panneau latéral ───────────────────────────────────────────────────────
     aside = html.Div([
@@ -217,8 +217,9 @@ def _view_scoring() -> html.Div:
                 style={"textAlign": "left", "padding": "9px 11px", "fontSize": "13px"},
             ),
             html.Div(
-                "Laisser vide : le dashboard inspecte automatiquement le compte au "
-                "score le plus élevé du dernier lot. Vous pouvez saisir un identifiant "
+                "Laisser vide : le dashboard inspecte automatiquement le dernier compte "
+                "scoré à chaque cycle de scoring, alerté ou non. Vous pouvez "
+                "saisir un identifiant "
                 "(ex. C42, U17, M3) pour suivre un compte précis. Jauge, contributions, "
                 "fenêtre glissante et vue « Fenêtres » portent sur ce compte ; le "
                 "scoring, lui, couvre tous les comptes du flux.",
@@ -274,9 +275,20 @@ def _view_scoring() -> html.Div:
             # Jauge de risque
             html.Div([
                 _kicker("Risque du compte inspecté"),
-                dcc.Graph(id="graph-gauge", figure=gauge_figure(None, 0.5),
-                          config={"displayModeBar": False},
-                          style={"height": "300px"}),
+                html.Div([
+                    html.Div([html.Span("COMPTE", className="mk-g-k"),
+                              html.Span("aucun", id="gauge-acc", className="mk-g-acc")],
+                             className="mk-g-head"),
+                    html.Div([html.Div(className="mk-g-arc"), html.Div(className="mk-g-tau"),
+                              html.Div(className="mk-g-needle"), html.Div(className="mk-g-hub")],
+                             className="mk-g-dial"),
+                    html.Div([html.Span(className="mk-g-num"), html.Span("%", className="mk-g-pct")],
+                             className="mk-g-value"),
+                    html.Div(gauge_meta(None, 0.5, ""), id="gauge-meta",
+                             style={"width": "100%", "display": "flex",
+                                    "flexDirection": "column", "alignItems": "center",
+                                    "gap": "6px"}),
+                ], id="graph-gauge", className="mk-gauge", style=gauge_state(None, 0.5)),
                 html.Div([
                     html.Div(id="verdict-badge"),
                     html.Span(id="verdict-note",
@@ -286,10 +298,12 @@ def _view_scoring() -> html.Div:
                 chart_help(
                     "Le score de risque (0 à 100 %) que MKAN attribue aux 10 dernières "
                     "transactions d'un seul compte, le compte inspecté.",
-                    "Le trait noir est le seuil de décision τ. Score à gauche "
-                    "(zone verte) : fenêtre jugée normale. Score à droite (zone rouge) : "
-                    "alerte de fraude. Près de 0 ou de 100 %, le modèle est catégorique ; "
-                    "près de τ, il hésite.",
+                    "L'aiguille donne le score, le trait noir sur l'arc le seuil τ. "
+                    "Zone verte : fenêtre jugée normale. Zone rouge : alerte de fraude. "
+                    "L'identifiant du compte se surligne quand on change de compte ; en "
+                    "mode automatique, c'est le dernier compte scoré à chaque cycle. Les "
+                    "barres du bas sont ses derniers scores : un compte peut basculer "
+                    "d'une transaction à l'autre.",
                     [(ZONE_OK, "Score < τ : normal"), (ZONE_ALERT, "Score ≥ τ : alerte"),
                      ("#17191C", "Seuil τ")]),
             ], style={"display": "flex", "flexDirection": "column", "gap": "14px"}),
@@ -370,11 +384,7 @@ def _view_window() -> html.Div:
             html.Div(id="window-summary",
                      style={"fontSize": "12px", "color": "var(--ink-3)",
                             "fontFamily": "var(--mono)"}),
-            html.Div(id="buffers-grid",
-                     style={"display": "grid", "gap": "1px",
-                            "gridTemplateColumns": "repeat(auto-fill, minmax(230px, 1fr))",
-                            "background": "var(--line-2)",
-                            "border": "1px solid var(--line-2)"}),
+            html.Div(id="buffers-grid"),
             chart_help(
                 "L'état de la fenêtre glissante de chaque compte actif du flux : le nombre de "
                 "ses transactions récentes déjà reçues, sur les 10 nécessaires pour être scoré.",
@@ -474,7 +484,7 @@ def _view_metrics() -> html.Div:
                           "Plus la courbe bleue s'éloigne de la diagonale pointillée vers le "
                           "coin en haut à gauche, meilleur est le modèle. Le point rouge est "
                           "la situation au seuil τ actuel.",
-                          [("#0F6FB8", "Courbe de MKAN"), ("#DCDBD4", "Hasard"),
+                          [("#0F6FB8", "Courbe de MKAN"), ("#D0D5DD", "Hasard"),
                            ("#C2334D", "Seuil τ actuel")])],
                      style={"display": "flex", "flexDirection": "column",
                             "gap": "12px", "minWidth": 0}),
@@ -487,7 +497,7 @@ def _view_metrics() -> html.Div:
                           "(plus il est gros, plus il en regroupe).",
                           "Les points doivent suivre la diagonale pointillée. Au-dessus : le "
                           "modèle sous-estime le risque. En dessous : il le surestime.",
-                          [("#7A5AA8", "Fréquence observée"), ("#DCDBD4", "Calibration idéale")])],
+                          [("#7A5AA8", "Fréquence observée"), ("#D0D5DD", "Calibration idéale")])],
                      style={"display": "flex", "flexDirection": "column",
                             "gap": "12px", "minWidth": 0}),
         ], className="mk-cols"),

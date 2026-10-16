@@ -10,11 +10,12 @@ petites (quelques Ko) et un Patch sur une figure vide provoque l'erreur
 from __future__ import annotations
 
 import plotly.graph_objects as go
+from dash import html
 
 from .layout import FEATURE_COLS, FEATURE_LABELS
 
 INK, INK3, INK4 = "#17191C", "#6B7280", "#9AA1AB"
-LINE = "#EDECE6"
+LINE = "#EEF0F4"
 ACCENT, DANGER, OK, VIOLET = "#0F6FB8", "#C2334D", "#2F7D5B", "#7A5AA8"
 GREY = "#B9BEC6"
 ZONE_OK, ZONE_ALERT = "#E7F3EC", "#F8E1E6"
@@ -32,45 +33,42 @@ def _base_layout(fig: go.Figure, height: int) -> go.Figure:
 
 # ── Jauge : score du compte inspecté ─────────────────────────────────────────
 
-def gauge_figure(score: float | None, tau: float, account: str = "") -> go.Figure:
-    """Score de risque (0-100 %) d'UN compte, comparé au seuil de décision τ.
+def gauge_state(score: float | None, tau: float, *, flash: int = 0) -> dict:
+    """Style (variables CSS) de la jauge animée `.mk-gauge` (voir style.css).
 
-    Deux zones : verte sous τ (transaction jugée normale), rouge au-dessus
-    (alerte). Le trait noir marque τ. score=None : aucun compte scoré."""
+    flash : parité 0/1, basculée à chaque changement de compte ; changer le nom
+    de l'animation relance le surlignage du compte."""
     waiting = score is None
-    pct = 0.0 if waiting else round(score * 100, 1)
-    alert = (not waiting) and score >= tau
-    color = GREY if waiting else (DANGER if alert else OK)
-    cut = tau * 100
+    p = 0.0 if waiting else min(max(float(score), 0.0), 1.0)
+    color = GREY if waiting else (DANGER if p >= tau else OK)
+    return {
+        "--p": round(p, 4), "--n": int(round(p * 100)), "--c": color, "--tau": tau,
+        "--flash": f"mk-flash-{flash}",
+    }
 
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number",
-        value=pct,
-        number=dict(suffix=" %", font=dict(size=42, family=MONO, color=color)),
-        domain=dict(x=[0, 1], y=[0.2, 1]),
-        gauge=dict(
-            axis=dict(range=[0, 100], tickvals=[0, 25, 50, 75, 100],
-                      ticktext=["0", "25", "50", "75", "100"],
-                      tickfont=dict(size=10, color=INK4)),
-            bar=dict(color=color, thickness=0.3),
-            bgcolor="white", borderwidth=0,
-            steps=[dict(range=[0, cut], color=ZONE_OK),
-                   dict(range=[cut, 100], color=ZONE_ALERT)],
-            threshold=dict(line=dict(color=INK, width=3), thickness=0.9, value=cut),
-        ),
-    ))
-    if waiting:
-        verdict = "<b style='color:#9AA1AB'>EN ATTENTE</b><br>" \
-                  "<span style='color:#9AA1AB;font-size:11px'>aucune fenêtre complète</span>"
+
+def gauge_meta(score: float | None, tau: float, mode: str,
+               history: list[float] | None = None):
+    """Verdict, mode de sélection et historique des derniers scores du compte."""
+    if score is None:
+        word, sub = "EN ATTENTE", "aucune fenêtre complète pour l'instant"
     else:
-        word = "ALERTE FRAUDE" if alert else "TRANSACTION NORMALE"
-        who = f"compte {account} · " if account else ""
-        verdict = (f"<b style='color:{color}'>{word}</b><br>"
-                   f"<span style='color:{INK3};font-size:11px'>{who}seuil τ = {cut:.0f} %</span>")
-    fig.add_annotation(text=verdict, x=0.5, y=0.0, xref="paper", yref="paper",
-                       showarrow=False, font=dict(size=13, family=FONT), align="center")
-    fig.update_layout(margin=dict(t=25, b=8, l=28, r=28))
-    return _base_layout(fig, 300)
+        word = "ALERTE FRAUDE" if score >= tau else "TRANSACTION NORMALE"
+        sub = f"score {score * 100:.1f} % · seuil τ = {tau * 100:.0f} %"
+    hist = list(history or [])[-24:]
+    bars = [html.I(style={"height": f"{max(s, 0.02) * 100:.0f}%",
+                          "background": DANGER if s >= tau else OK,
+                          "opacity": .35 + .65 * (i + 1) / len(hist)},
+                   title=f"{s * 100:.1f} %")
+            for i, s in enumerate(hist)]
+    spark = html.Div([
+        html.Div([html.Span(f"SES {len(hist)} DERNIERS SCORES" if hist else "AUCUN SCORE"),
+                  html.Span("le plus récent →")], className="mk-g-spark-k"),
+        html.Div(bars + [html.B(style={"bottom": f"{tau * 100:.0f}%"})], className="mk-g-bars"),
+    ], className="mk-g-spark")
+    return [html.Div(word, className="mk-g-word"),
+            html.Div([sub, html.Br(), mode], className="mk-g-sub"),
+            spark]
 
 
 # ── Contributions des variables ──────────────────────────────────────────────

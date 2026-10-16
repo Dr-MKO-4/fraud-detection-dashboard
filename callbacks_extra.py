@@ -31,7 +31,7 @@ INK, INK3, INK4 = "#17191C", "#6B7280", "#9AA1AB"
 # Cache des figures splines  calculées une seule fois par session (modèle immuable)
 _spline_cache: dict = {}   # {id(inference): (grid_html, norm_tbl_html)}
 ACCENT, DANGER, OK, WARN, VIOLET = "#0F6FB8", "#C2334D", "#2F7D5B", "#C9A227", "#7A5AA8"
-LINE = "#EDECE6"
+LINE = "#EEF0F4"
 MONO = dict(family="IBM Plex Mono, monospace", size=11, color=INK3)
 
 STAGE_TEXT = {
@@ -246,7 +246,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         live = (cfg or {}).get("mode") == "live"
         form = {"display": "flex" if live else "none", "flexDirection": "column",
                 "gap": "8px", "padding": "14px", "border": f"1px solid {LINE}",
-                "background": "#FCFCFA"}
+                "background": "#F8F9FB"}
         note = {"fontSize": "11px", "color": INK4, "lineHeight": 1.5,
                 "display": "none" if live else "block"}
         return form, note
@@ -450,7 +450,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         fpr_c, tpr_c = R["fpr_curve"], R["tpr_curve"]
         roc = go.Figure([
             go.Scatter(x=[0, 1], y=[0, 1], mode="lines",
-                       line=dict(color="#DCDBD4", dash="dot", width=1)),
+                       line=dict(color="#D0D5DD", dash="dot", width=1)),
             go.Scatter(x=fpr_c, y=tpr_c, mode="lines", line=dict(color=ACCENT, width=2)),
             go.Scatter(x=[R["fpr"]], y=[R["recall"]], mode="markers",
                        marker=dict(color=DANGER, size=9)),
@@ -461,7 +461,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         rel = [(p, o, n) for p, o, n in R["reliability_data"] if n]
         cal = go.Figure([
             go.Scatter(x=[0, 1], y=[0, 1], mode="lines",
-                       line=dict(color="#DCDBD4", dash="dot", width=1)),
+                       line=dict(color="#D0D5DD", dash="dot", width=1)),
             go.Scatter(x=[p for p, _, _ in rel], y=[o for _, o, _ in rel],
                        mode="lines+markers", line=dict(color=VIOLET, width=2),
                        marker=dict(size=[min(18, 6 + n ** .5) for _, _, n in rel],
@@ -702,10 +702,10 @@ def register_extra(app, buffer=None, inference=None) -> None:
                                 html.Span(v, className="mk-num",
                                           style={"fontSize": "14px", "fontWeight": 600})],
                                style={"display": "flex", "flexDirection": "column", "gap": "4px",
-                                      "padding": "11px 13px", "background": "#FCFCFA"})
+                                      "padding": "11px 13px", "background": "#F8F9FB",
+                                      "borderRadius": "10px"})
                       for k, v in kpi_rows],
-                     style={"display": "grid", "gap": "1px", "background": LINE,
-                            "border": f"1px solid {LINE}",
+                     style={"display": "grid", "gap": "8px",
                             "gridTemplateColumns": "repeat(auto-fit, minmax(126px, 1fr))"}),
 
             html.H2("4 · Réserves et limites d'opposabilité"),
@@ -822,7 +822,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                 html.Div(f"{level}/10", style={"fontSize": "10px", "color": INK4,
                                                "fontFamily": "var(--mono)"}),
             ], style={
-                "padding": "10px 12px", "background": "#fff",
+                "padding": "10px 12px", "background": "#fff", "borderRadius": "12px",
                 "border": f"2px solid {ACCENT}" if is_active else f"1px solid {LINE}",
             }))
         if not cards:
@@ -832,9 +832,8 @@ def register_extra(app, buffer=None, inference=None) -> None:
                 style={"fontSize": "13px", "color": INK4})
         else:
             grid_content = html.Div(cards, style={
-                "display": "grid", "gap": "1px",
+                "display": "grid", "gap": "10px",
                 "gridTemplateColumns": "repeat(auto-fill, minmax(140px, 1fr))",
-                "background": "var(--line-2)", "border": "1px solid var(--line-2)",
             })
         summary = (f"{n_active:,} comptes actifs au total · parmi les {len(candidates)} plus "
                    f"récemment actifs, {n_full} ont une fenêtre complète (scorés) · "
@@ -977,9 +976,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         grid = html.Div(spline_graphs, style={
             "display": "grid",
             "gridTemplateColumns": "repeat(auto-fill, minmax(240px, 1fr))",
-            "gap": "1px",
-            "background": LINE,
-            "border": f"1px solid {LINE}",
+            "gap": "10px",
         })
         _spline_cache[cache_key] = (grid, norm_tbl)   # mise en cache pour les prochaines visites
         return grid, norm_tbl
