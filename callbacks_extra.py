@@ -255,6 +255,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
     @app.callback(Output("live-connect-msg", "children"),
                   Output("store-journal", "data", allow_duplicate=True),
                   Output("store-totals", "data", allow_duplicate=True),
+                  Output("store-lots", "data", allow_duplicate=True),
                   Input("btn-connect-live", "n_clicks"),
                   State("radio-source", "value"), State("inp-rest-url", "value"),
                   State("inp-rest-token", "value"), State("inp-kafka-bootstrap", "value"),
@@ -263,7 +264,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
     def on_connect_live(n, source, rest_url, token, bootstrap, topic, cfg):
         if not n:
             raise PreventUpdate
-        err = lambda m: (html.Span(m, style={"color": DANGER}), no_update, no_update)
+        err = lambda m: (html.Span(m, style={"color": DANGER}), no_update, no_update, no_update)
         if (cfg or {}).get("mode") != "live":
             return err("Cette saisie ne s'applique qu'au mode live.")
         rest_url, bootstrap, topic = ((rest_url or "").strip(), (bootstrap or "").strip(),
@@ -278,7 +279,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
             ep = {"rest_url": rest_url, "rest_token": (token or "").strip()}
         _live_ingest.start(source or "rest", ep)
         return (html.Span("Connexion lancée : l'état du flux s'affiche ci-dessous.",
-                          style={"color": OK}), [], {})
+                          style={"color": OK}), [], {}, [])
 
     # 4 · état de l'environnement (valeurs réellement mesurées, rien de simulé)
     _env_last: list = [None]   # clé du dernier rendu : évite de redessiner pour rien
@@ -502,7 +503,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         # Fraîcheur et cumul de la session : la fenêtre des 2 000 dernières décisions se
         # renouvelle en quelques secondes, donc ses valeurs bougent peu ; le cumul et la
         # courbe d'évolution montrent ce qui change vraiment.
-        n_lots = len({j["time"] for j in journal})
+        n_lots = len({j.get("lot", j["time"]) for j in journal})   # 2 lots peuvent partager la seconde
         t = totals or {}
         s_scored, s_alerts = int(t.get("scored", 0)), int(t.get("alerts", 0))
         s_fraud, s_tp = int(t.get("fraud", 0)), int(t.get("tp", 0))
@@ -997,6 +998,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         Output("store-journal", "data", allow_duplicate=True),
         Output("store-totals",  "data", allow_duplicate=True),
         Output("audit-purge-msg", "children"),
+        Output("store-lots",    "data", allow_duplicate=True),
         Input("btn-purge",      "n_clicks"),
         State("store-config",   "data"),
         State("store-totals",   "data"),
@@ -1008,7 +1010,8 @@ def register_extra(app, buffer=None, inference=None) -> None:
         if (cfg or {}).get("mode") == "live":
             return (no_update, no_update,
                     html.Span("Purge impossible en mode live : le journal est scellé "
-                              "(opposable au dossier COBAC).", style={"color": DANGER}))
+                              "(opposable au dossier COBAC).", style={"color": DANGER}),
+                    no_update)
         n = int((totals or {}).get("scored", 0))
         if buffer is not None:
             buffer.clear_drift()
@@ -1017,7 +1020,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         _cb_mod._last_result = None
         return ([], {"epoch": epoch},
                 html.Span(f"Session purgée : {_fmt(n)} décisions effacées, compteurs remis à zéro.",
-                          style={"color": OK}))
+                          style={"color": OK}), [])
 
     app.clientside_callback("function(n){ if(n){ window.print(); } return ''; }",
                             Output("btn-print", "title"), Input("btn-print", "n_clicks"),

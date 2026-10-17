@@ -95,7 +95,7 @@ def _header() -> html.Header:
     return html.Header([
         html.Div([
             html.Div([
-                html.Div("M", className="mk-mark"),
+                html.Img(src="/assets/logo_mkan.png", className="mk-logo", alt="MKAN logo"),
                 html.Span("MKAN", style={"fontSize": "14px", "fontWeight": 600}),
                 html.Span("v3.0", className="mk-ver"),
             ], className="mk-brand"),
@@ -868,7 +868,7 @@ def _view_aide() -> html.Div:
                "pour un compte donné. Le scoring ne démarre qu'une fois les 10 cases remplies."),
             _box(
                 _kv("Routage multi-comptes", "Chaque transaction est routée vers la fenêtre de son compte émetteur (nameOrig). Le scoring s'exécute sur TOUS les comptes : dès qu'une fenêtre atteint 10, le modèle score ce compte."),
-                _kv("Compte inspecté", "Le champ « Compte inspecté » (vide = automatique) désigne le compte expliqué en détail. La jauge, les contributions, la fenêtre glissante du panneau latéral et la vue Fenêtres portent sur ce compte. En automatique, c'est le compte au score le plus élevé du dernier lot, conservé quelques secondes."),
+                _kv("Compte inspecté", "Le champ « Compte inspecté » (vide = automatique) désigne le compte expliqué en détail. La jauge, les contributions, la fenêtre glissante du panneau latéral et la vue Fenêtres portent sur ce compte. En automatique, c'est le dernier compte scoré du dernier lot, alerté ou non."),
                 _kv("Injection de scénario", "Ajoute une transaction synthétique à la fenêtre du compte inspecté puis la re-score. Utile pour tester la réaction du modèle à un type de fraude."),
                 _kv("Vue Fenêtres", "Affiche les 48 comptes les plus remplis (le compte inspecté en premier) et la fenêtre du compte inspecté sous forme de carte de chaleur."),
             ),
@@ -988,6 +988,7 @@ def build_layout() -> html.Div:
         # ── Stores ────────────────────────────────────────────────────────────
         dcc.Store(id="store-last-result"),
         dcc.Store(id="store-journal",  data=[]),
+        dcc.Store(id="store-lots",     data=[]),   # points de l'onglet Historique
         dcc.Store(id="store-cursor",   data=0),    # compteur d'injections de scénario
         dcc.Store(id="store-batch-cursor", data=0),  # nombre de lots live traités
         dcc.Store(id="store-account-id", data=""),   # "" = compte inspecté automatique

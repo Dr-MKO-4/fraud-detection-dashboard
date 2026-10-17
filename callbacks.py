@@ -86,7 +86,8 @@ def _explain_worker() -> None:
     """Thread démon : dépile (entry_id, window) et calcule l'explication
     complète (contributions par porte). Ne touche jamais les stores Dash
     directement  dépose le résultat dans _explain_pending, lu et fusionné
-    dans store-journal par le callback merge_explanations (slow-interval)."""
+    dans store-journal par le tick suivant (_merge_explanations), ou par le
+    callback merge_explanations quand le scoring est en pause."""
     while True:
         entry_id, window = _explain_queue.get()
         try:
@@ -499,6 +500,31 @@ _drift_tab_cache: dict = {"version": -1, "fig": None}
 _inspect: dict = {"acct": None}
 
 
+# Agrégats par lot de l'onglet Historique : store-lots (propre à chaque onglet du
+# navigateur), écrit par la MÊME réponse que la jauge, donc toujours en phase avec
+# elle (réponse jetée par Dash => ni jauge ni point). Avant : regroupement du
+# journal par seconde murale (deux ticks à 0,5 s fusionnés), journal plafonné à
+# 2000 décisions (~10 lots visibles) et écrasé par merge_explanations.
+LOTS_MAX = 60
+
+
+def _merge_explanations(journal: list) -> bool:
+    """Patche dans le journal les explications prêtes (_explain_worker)."""
+    with _explain_lock:
+        if not _explain_pending:
+            return False
+        pending = dict(_explain_pending)
+        _explain_pending.clear()
+    changed = False
+    for e in journal:
+        info = pending.get(e.get("id"))
+        if info is not None:
+            e["driver"] = info["driver"]
+            e["contribution"] = info["contribution"]
+            changed = True
+    return changed
+
+
 _recent_accts: "OrderedDict[str, None]" = OrderedDict()   # comptes des derniers lots (LRU)
 _RECENT_MAX = 400
 
@@ -629,13 +655,15 @@ def _process(account_id: str, features: list[float],
 # ── Traitement du flux live (1 tick = tout ce qui est arrivé depuis le dernier) ─
 
 def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals: dict,
-                prev: dict | None = None):
+                prev: dict | None = None, lots: list | None = None):
     """
     Score tout ce que le flux live a livré depuis le tick précédent, en un
     seul forward pass batché, puis explique UN compte (le compte inspecté).
     Retourne les 18 valeurs du callback principal + les compteurs cumulés.
+    `lots` (copie de store-lots) est complété sur place avec le point de ce lot.
     """
     global _entry_id_counter, _last_result
+    lots = [] if lots is None else lots
 
     accounts, batch_features, batch_meta, step_val = _live_ingest.pop_pending()
 
@@ -698,7 +726,7 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
         n_fraud += lab or 0
         n_tp += int(bool(fraud) and bool(lab))
         new_entries.append({
-            "id": eid, "time": now_str, "acct": acc,
+            "id": eid, "time": now_str, "lot": new_batch_cursor, "acct": acc,
             "score": round(sc_f, 6), "verdict": "FRAUDE" if fraud else "NORMALE",
             "driver": "", "label": lab,
         })
@@ -711,8 +739,16 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
 
     n_scored = len(new_entries)
     n_alerts = int(is_fraud.sum()) if len(is_fraud) else 0
+    if not int((totals or {}).get("scored", 0)):
+        lots.clear()                       # nouvelle session (purge, connexion, époque)
     new_totals = _bump_totals(totals, n_scored, n_alerts, n_fraud, n_tp)
     clock_str  = _step_to_clock(step_val)
+    if n_scored:
+        labs = [e["label"] for e in new_entries if e["label"] is not None]
+        lot = {"lot": new_batch_cursor, "clock": clock_str, "step": step_val,
+               "n": n_scored, "alert_pct": 100 * n_alerts / n_scored,
+               "fraud_pct": 100 * sum(labs) / len(labs) if labs else None, "tau": tau}
+        lots.append(lot)
     cursor_str = f"pas {step_val} · {n_scored}/{n_batch} scorées"
 
     if not n_scored:
@@ -742,6 +778,7 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
                   f" ({pct:.0f} % = taux d'alerte, pas un score)")
     level = _buffer.get_fill_level(inspect_acc)
     new_journal = (list(journal or []) + new_entries)[-2000:]
+    _merge_explanations(new_journal)   # ici et non dans un 2e écrivain du store (course)
     tele_acc = f"{inspect_acc}{' · auto' if auto else ''}"
 
     window = complete[inspect_acc] if rescored else None
@@ -749,6 +786,8 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
         window = _buffer.get_window(inspect_acc)
 
     if window is None:
+        # Jauge figée : le lot garde le score qu'elle affiche toujours
+        lot.update(acct=inspect_acc, gauge=(prev or {}).get("score"))
         return (no_update, no_update, f"{level}/{W}", _WINDOW_CELLS_CACHE[min(level, W)],
                 no_update, no_update, no_update, new_journal,
                 tele_acc, f"{level}/{W}",
@@ -761,6 +800,7 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
 
     result = _inference.score(window, tau)   # explication complète, 1 compte
     _last_result = result
+    lot.update(acct=inspect_acc, gauge=result["score"])
 
     mode = ("automatique : dernier compte scoré à chaque cycle, alerté ou non" if auto
             else "suivi manuel")
@@ -813,6 +853,7 @@ def register_callbacks(app) -> None:
         Output("store-totals",         "data"),
         Output("gauge-acc",            "children"),
         Output("gauge-meta",           "children"),
+        Output("store-lots",           "data"),
         Input("auto-interval",         "n_intervals"),
         Input("btn-inject-ato",        "n_clicks"),
         Input("btn-inject-refund",     "n_clicks"),
@@ -827,21 +868,27 @@ def register_callbacks(app) -> None:
         State("store-config",          "data"),
         State("store-totals",          "data"),
         State("store-last-result",     "data"),
+        State("store-lots",            "data"),
         prevent_initial_call=True,
     )
     def on_tick_or_inject(n_intervals,
                           n_ato, n_refund, n_fake, n_split, n_smurf, n_anomaly,
                           cursor, batch_cursor, account_id, journal, cfg, totals,
-                          last_result):
+                          last_result, store_lots):
         triggered  = ctx.triggered_id
         tau        = float((cfg or {}).get("tau", 0.5))
         cursor     = int(cursor or 0)
         journal    = journal or []
         account_id = str(account_id or "").strip()   # "" = compte inspecté automatiquement
 
+        old_lots = store_lots or []
+        new_lots = list(old_lots)
+        lots_out = lambda: new_lots[-LOTS_MAX:] if new_lots != old_lots else no_update
+
         if triggered == "auto-interval":
-            return _tick_batch(batch_cursor, account_id, journal, tau, totals,
-                               prev=last_result)
+            out = _tick_batch(batch_cursor, account_id, journal, tau, totals,
+                              prev=last_result, lots=new_lots)
+            return (*out, lots_out())
 
         if triggered not in _SCENARIO_BTN_MAP:
             raise PreventUpdate
@@ -860,13 +907,18 @@ def register_callbacks(app) -> None:
                                      level=level, prev=last_result)
         proc = list(proc)
         verdict = proc[5]
+        if window is not None:   # point « injection » dans l'onglet Historique
+            new_lots.append({"lot": None, "inject": _SCENARIO_BTN_MAP[triggered],
+                             "clock": "injection", "step": None, "n": 1,
+                             "alert_pct": None, "fraud_pct": None, "tau": tau,
+                             "acct": acc, "gauge": proc[4]["score"]})
         new_totals = (_bump_totals(totals, 1, int(verdict == "FRAUDE"), 1,
                                    int(verdict == "FRAUDE"))
                       if window is not None else (totals or {}))
         proc[10] = _fmt_int(new_totals.get("scored", 0))       # tele-count
         proc[11] = _fmt_int(new_totals.get("alerts", 0))       # tele-alerts
         return (*proc, new_cursor, "", f"injection {new_cursor}", no_update, new_totals,
-                *gauge_extra)
+                *gauge_extra, lots_out())
 
     # ── 2 · Cadence de scoring → intervalle ─────────────────────────────────────
     @app.callback(
@@ -974,27 +1026,22 @@ def register_callbacks(app) -> None:
         return _live_ingest.stats()
 
     # ── 5c · Fusion des explications asynchrones (score > 70%) dans le journal ─
+    # Scoring en cours : la fusion se fait dans le tick (_tick_batch). Ce callback,
+    # second écrivain de store-journal, renvoyait sinon une copie lue AVANT le tick
+    # en vol et effaçait les lots que celui-ci venait d'ajouter. Il ne sert donc
+    # qu'en pause, quand aucun tick n'écrit le journal.
     @app.callback(
         Output("store-journal", "data", allow_duplicate=True),
         Input("slow-interval",  "n_intervals"),
         State("store-journal",  "data"),
+        State("auto-interval",  "disabled"),
         prevent_initial_call=True,
     )
-    def merge_explanations(_slow, journal):
-        with _explain_lock:
-            if not _explain_pending:
-                raise PreventUpdate
-            pending = dict(_explain_pending)
-            _explain_pending.clear()
+    def merge_explanations(_slow, journal, paused):
+        if not paused:
+            raise PreventUpdate
         journal = journal or []
-        changed = False
-        for e in journal:
-            info = pending.get(e.get("id"))
-            if info is not None:
-                e["driver"] = info["driver"]
-                e["contribution"] = info["contribution"]
-                changed = True
-        if not changed:
+        if not _merge_explanations(journal):
             raise PreventUpdate
         return journal
 
@@ -1005,49 +1052,76 @@ def register_callbacks(app) -> None:
         Output("div-btn-symbolic", "style"),
         Input("tabs-bottom",       "value"),
         Input("slow-interval",     "n_intervals"),
+        Input("store-lots",        "data"),     # écrit dans la même réponse que la jauge
         State("store-account-id",  "data"),
-        State("store-journal",     "data"),
+        State("store-config",      "data"),
         prevent_initial_call=True,
     )
-    def update_tab(tab, _slow, account_id, journal):
+    def update_tab(tab, _slow, store_lots, account_id, cfg):
+        tau_cur = float((cfg or {}).get("tau", 0.5))
         from dash import dcc as _dcc
         btn_hidden = {"display": "none"}
         btn_show   = {"display": "block"}
         acc        = inspected_account(account_id) or ""
+        if ctx.triggered_id == "store-lots" and tab != "tab-history":
+            raise PreventUpdate
 
         if tab == "tab-history":
-            # Un « lot » = toutes les décisions d'un même tick (même horodatage).
-            journal = journal or []
-            groups: dict[str, list] = {}
-            for j in journal:
-                groups.setdefault(j["time"], []).append(j)
-            if len(groups) < 2:
+            # Un point = un lot, c.-à-d. les décisions d'un tick, celui qui a mis la
+            # jauge à jour (store-lots, écrit dans la même réponse que la jauge).
+            lots = list(store_lots or [])
+            if len(lots) < 2:
                 return _waiting("Pas encore assez de décisions. Un compte n'est scoré qu'après "
                                 f"{W} transactions : patientez quelques instants."), btn_hidden
-            times = list(groups)[-60:]
-            alert_pct = [100 * sum(e["verdict"] == "FRAUDE" for e in groups[t]) / len(groups[t])
-                         for t in times]
+            # Abscisse = rang de l'événement : un lot du flux ou une injection
+            xs = list(range(1, len(lots) + 1))
+            info = [(f"injection {l['inject']} · compte {l['acct']}" if l.get("inject") else
+                     f"lot {l['lot']} · {l['clock']} · {l['n']} comptes scorés"
+                     + (f" · jauge : {l['acct']}" if l.get("acct") else ""))
+                    for l in lots]
+            alert_pct = [l["alert_pct"] for l in lots]
             # vérité terrain : absente d'un vrai flux opérateur (courbe alors omise)
-            def _truth(t):
-                lab = [e["label"] for e in groups[t] if e.get("label") is not None]
-                return 100 * sum(lab) / len(lab) if lab else None
-            fraud_pct = [_truth(t) for t in times]
+            fraud_pct = [l["fraud_pct"] for l in lots]
             has_truth = any(v is not None for v in fraud_pct)
-            traces = [go.Scatter(x=times, y=alert_pct, mode="lines+markers",
-                                 name="Alertes de MKAN", line=dict(color=ACCENT, width=2),
-                                 marker=dict(size=5),
-                                 hovertemplate="%{x}<br>alertes MKAN : %{y:.0f} %<extra></extra>")]
+            # score affiché par la jauge à l'issue de chaque événement (même valeur)
+            gauge_pct = [None if l.get("gauge") is None else 100 * l["gauge"] for l in lots]
+            # τ en vigueur au moment de chaque décision (le curseur peut avoir bougé)
+            tau_pct = [100 * float(l.get("tau", tau_cur)) for l in lots]
+            traces = [
+                go.Scatter(x=xs, y=alert_pct, mode="lines+markers", connectgaps=True,
+                           name="Alertes de MKAN (lot)", line=dict(color=ACCENT, width=2),
+                           marker=dict(size=5), customdata=info,
+                           hovertemplate="%{customdata}<br>alertes MKAN : %{y:.0f} %<extra></extra>"),
+                go.Scatter(x=xs, y=gauge_pct, mode="lines+markers", connectgaps=True,
+                           name="Score de la jauge (1 compte)",
+                           line=dict(color=INK4, width=1, dash="dot"),
+                           marker=dict(size=[11 if l.get("inject") else 6 for l in lots],
+                                       symbol=["star" if l.get("inject") else "circle"
+                                               for l in lots],
+                                       color=[INK4 if g is None else
+                                              (DANGER if g >= t else OK)
+                                              for g, t in zip(gauge_pct, tau_pct)]),
+                           customdata=info,
+                           hovertemplate="%{customdata}<br>score de la jauge : %{y:.1f} %<extra></extra>"),
+            ]
             if has_truth:
                 traces.insert(0, go.Scatter(
-                    x=times, y=fraud_pct, mode="lines", name="Fraude réelle",
-                    line=dict(color=INK3, width=2, dash="dash"),
-                    hovertemplate="%{x}<br>fraude réelle : %{y:.0f} %<extra></extra>"))
+                    x=xs, y=fraud_pct, mode="lines", name="Fraude réelle (lot)",
+                    connectgaps=True,
+                    line=dict(color=INK3, width=2, dash="dash"), customdata=info,
+                    hovertemplate="%{customdata}<br>fraude réelle : %{y:.0f} %<extra></extra>"))
+            traces.append(go.Scatter(
+                x=xs, y=tau_pct, mode="lines", name="Seuil τ", line_shape="hv",
+                line=dict(color=DANGER, width=1, dash="dot"), opacity=.6,
+                hovertemplate="seuil τ : %{y:.0f} %<extra></extra>"))
             fig = go.Figure(traces)
+            last = lots[-1]
             fig.update_layout(
-                yaxis=dict(title="% des comptes du lot", range=[0, 100], gridcolor=LINE,
-                           ticksuffix=" %"),
-                xaxis=dict(title="Heure du lot (un point = un lot scoré)", gridcolor=LINE,
-                           nticks=8),
+                yaxis=dict(title="%", range=[0, 100], gridcolor=LINE, ticksuffix=" %"),
+                xaxis=dict(title=("Événement (le dernier, à droite, est celui de la jauge : "
+                                  + (f"injection sur {last['acct']}" if last.get("inject")
+                                     else last["clock"]) + ")"),
+                           gridcolor=LINE, nticks=8),
                 legend=dict(orientation="h", y=1.15, x=0),
                 height=240, margin=dict(t=30, b=44, l=56, r=20),
                 paper_bgcolor="white", plot_bgcolor="white",
@@ -1056,14 +1130,18 @@ def register_callbacks(app) -> None:
             help_ = chart_help(
                 "Pour chaque lot de transactions scoré (un point), le pourcentage de comptes "
                 "que MKAN a mis en alerte" + (", comparé au pourcentage de comptes réellement "
-                "frauduleux (la vérité, connue du simulateur)." if has_truth else
-                ". Ce flux ne fournit pas de vérité terrain : la courbe de fraude réelle "
-                "n'est pas disponible."),
-                "Les deux courbes devraient se suivre. Alertes nettement au-dessus de la fraude "
-                "réelle : trop de fausses alertes. En dessous : des fraudes manquées. Un écart "
-                "qui dure indique un problème (données qui ne ressemblent plus à l'entraînement, "
-                "seuil τ mal placé).",
-                [(ACCENT, "Alertes de MKAN"), (INK3, "Fraude réelle")])
+                "frauduleux (la vérité, connue du simulateur)" if has_truth else
+                " (ce flux ne fournit pas de vérité terrain : pas de courbe de fraude réelle)")
+                + ". Les points pointillés reprennent le score affiché par la jauge après "
+                "chaque lot : celui d'UN compte, le compte inspecté (étoile = injection de "
+                "scénario). Le dernier point est toujours la valeur actuelle de la jauge.",
+                "Les courbes de lot devraient se suivre. Alertes nettement au-dessus de la "
+                "fraude réelle : trop de fausses alertes. En dessous : des fraudes manquées. "
+                "Un écart qui dure indique un problème (données qui ne ressemblent plus à "
+                "l'entraînement, seuil τ mal placé). Le score de la jauge, lui, porte sur un "
+                "seul compte : il peut être bas dans un lot très alerté, et inversement.",
+                [(ACCENT, "Alertes de MKAN"), (INK3, "Fraude réelle"),
+                 (INK4, "Score de la jauge"), (DANGER, "Seuil τ")])
             return html.Div([_dcc.Graph(figure=fig, config={"displayModeBar": False}),
                              help_]), btn_hidden
 
