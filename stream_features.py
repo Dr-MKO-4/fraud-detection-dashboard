@@ -91,7 +91,7 @@ class IncrementalFeatures:
         step = int(step)
         self.last_step = max(self.last_step, step)
 
-        # --- agrégats de step : v1h et var_agent_split ---------------------
+        # agrégats de step : v1h et var_agent_split ---------------------
         count_by_acct: dict[str, int] = defaultdict(int)
         cash_in: dict[tuple, list] = defaultdict(list)
         for r in rows:
@@ -103,7 +103,7 @@ class IncrementalFeatures:
             m = sum(vals) / len(vals)
             var_split[key] = sum((v - m) ** 2 for v in vals) / len(vals)   # ddof = 0
 
-        # --- 1) état des comptes concernés, nettoyé, AVANT le step ---------
+        # 1) état des comptes concernés, nettoyé, AVANT le step ---------
         touched = {r["nameOrig"] for r in rows}
         baseline: dict[str, tuple] = {}
         for a in touched:
@@ -128,7 +128,7 @@ class IncrementalFeatures:
                 dq.popleft()
             n_refund_in[a] = len(dq)
 
-        # --- 2) is_new pour chaque ligne, dans l'ordre, puis mises à jour --
+        # 2) is_new pour chaque ligne, dans l'ordre, puis mises à jour --
         is_new_row: list[int] = []
         for r in rows:
             key = (r["nameOrig"], r["nameDest"])
@@ -146,7 +146,7 @@ class IncrementalFeatures:
             step_new[a] += new
             step_n[a] += 1
 
-        # --- 3) calcul ligne par ligne ---------------------------------------
+        # 3) calcul ligne par ligne ---------------------------------------
         out: list[list[float]] = []
         night = 1.0 if (step % 24 >= 22 or step % 24 < 6) else 0.0
         for r, new in zip(rows, is_new_row):
@@ -195,7 +195,7 @@ class IncrementalFeatures:
                 rho_nouveau,
             ])
 
-        # --- 4) versement du step dans l'état des comptes -------------------
+        # 4) versement du step dans l'état des comptes -------------------
         for r, new in zip(rows, is_new_row):
             st = self._acc[r["nameOrig"]]
             amt = float(r["amount"])
@@ -210,7 +210,7 @@ class IncrementalFeatures:
                 if prev is None or prev[0] != step or amt > prev[1]:
                     self._last_in[r["nameDest"]] = (step, amt)
 
-        # --- 5) purge périodique de la mémoire ---------------------------------
+        # 5) purge périodique de la mémoire ---------------------------------
         if step - self._last_prune >= 240:
             self._last_prune = step
             horizon = step - NEW_DEST_GAP

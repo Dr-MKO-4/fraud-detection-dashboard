@@ -81,7 +81,29 @@ app = dash.Dash(
     __name__,
     title="MKAN  Scoring Fraude",
     suppress_callback_exceptions=True,
+    assets_folder=str(_ROOT / "dashboard" / "assets"),
+    update_title=None,
 )
+app.index_string = """
+<!DOCTYPE html>
+<html>
+  <head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    <link rel="icon" type="image/png" href="/assets/logo_mkan.png">
+    {%css%}
+  </head>
+  <body>
+    {%app_entry%}
+    <footer>
+      {%config%}
+      {%scripts%}
+      {%renderer%}
+    </footer>
+  </body>
+</html>
+"""
 app.layout = build_layout()
 callbacks.register_callbacks(app)
 callbacks_extra.register_extra(app, buffer=buffer, inference=inference)

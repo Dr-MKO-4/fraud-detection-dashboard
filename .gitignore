@@ -3,3 +3,11 @@ __pycache__/
 users.json
 *.log
 .env
+
+# Modèles et scores (lourds, non publiés)
+*.pt
+*.npy
+
+# Fichiers parasites macOS
+._*
+.DS_Store
