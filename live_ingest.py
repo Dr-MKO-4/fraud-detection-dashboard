@@ -58,6 +58,16 @@ _steps: dict[int, list] = {}
 _max_seen = -1
 _last_row_time = 0.0
 _prefill: dict[str, deque] = defaultdict(lambda: deque(maxlen=10))
+# Construit le vecteur d'entrée du modèle à partir de (transaction, 12 variables en
+# flux) ; fourni par app.py (MKANInference.vector_from_row). None : les 12 variables.
+_vector_builder = None
+
+
+def set_vector_builder(fn) -> None:
+    """Branche la construction du vecteur d'entrée propre au modèle chargé
+    (régime brut ou traité, ordre des colonnes du checkpoint)."""
+    global _vector_builder
+    _vector_builder = fn
 _cur_run = None
 _on_reset = None          # fonction appelée à chaque nouveau flux (vidage du buffer)
 
@@ -184,6 +194,8 @@ def _flush_prefill(step: int) -> None:
 
 def _emit_step(step: int, rows: list[dict]) -> None:
     feats = _engine.update_step(step, rows)
+    if _vector_builder is not None:
+        feats = [_vector_builder(r, f) for r, f in zip(rows, feats)]
     live_acc, live_mat, live_meta = [], [], []
     for r, f in zip(rows, feats):
         acc = str(r["nameOrig"])

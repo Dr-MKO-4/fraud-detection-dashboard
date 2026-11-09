@@ -25,9 +25,36 @@ MONO = "IBM Plex Mono, monospace"
 MEMORY_LABEL = "Mémoire de la fenêtre (état caché h)"
 
 
+def register_plotly_theme() -> None:
+    """Thème commun à tous les graphiques (police, grilles, axes, survol,
+    légende, marges, couleurs). Appelé une fois au démarrage : chaque figure
+    en hérite, même construite ailleurs, sauf ce qu'elle redéfinit elle-même.
+    Code couleur fixe : rouge = fraude/alerte, vert = normal, bleu = modèle,
+    violet = mémoire (état caché)."""
+    import plotly.io as pio
+    axis = dict(showline=False, zeroline=False, gridcolor=LINE, gridwidth=1,
+                ticks="", tickfont=dict(family=MONO, size=8, color=INK3),
+                title=dict(font=dict(family=FONT, size=8.8, color=INK3), standoff=10),
+                automargin=True)
+    pio.templates["mkan"] = go.layout.Template(layout=go.Layout(
+        font=dict(family=FONT, size=9.6, color=INK),
+        paper_bgcolor="white", plot_bgcolor="white",
+        colorway=[ACCENT, DANGER, OK, VIOLET, "#D98E04", GREY],
+        margin=dict(t=28.8, b=32, l=41.6, r=12.8),
+        xaxis=axis, yaxis=axis,
+        # Position de légende laissée à chaque figure (elles la placent déjà) :
+        # seuls fond et police sont harmonisés ici.
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(size=8.4, color=INK3)),
+        hoverlabel=dict(bgcolor="white", bordercolor=LINE,
+                        font=dict(family=MONO, size=8.8, color=INK)),
+        title=dict(font=dict(family=FONT, size=9.6, color=INK3), x=0, xanchor="left"),
+    ))
+    pio.templates.default = "plotly_white+mkan"
+
+
 def _base_layout(fig: go.Figure, height: int) -> go.Figure:
     fig.update_layout(height=height, paper_bgcolor="white", plot_bgcolor="white",
-                      font=dict(family=FONT, size=12, color=INK))
+                      font=dict(family=FONT, size=9.6, color=INK))
     return fig
 
 
@@ -111,9 +138,9 @@ def contribution_figure(rows: list[dict]) -> go.Figure:
     if not rows:
         fig.add_annotation(text="En attente d'un compte à fenêtre complète",
                            xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
-                           font=dict(size=13, color=INK4))
+                           font=dict(size=10.4, color=INK4))
         fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
-        return _base_layout(fig, 340)
+        return _base_layout(fig, 272)
 
     # Arrondi au plus grand reste : arrondir chaque part séparément donnait un total
     # affiché de 96 à 99 %, alors que les parts somment exactement à 100 %.
@@ -134,16 +161,16 @@ def contribution_figure(rows: list[dict]) -> go.Figure:
             x=[r["share"] for r in sub], y=[r["label"] for r in sub],
             orientation="h", name=name, marker_color=color,
             text=[f"{r['shown']} %" for r in sub], textposition="outside",
-            textfont=dict(family=MONO, size=10, color=INK3), cliponaxis=False,
+            textfont=dict(family=MONO, size=8, color=INK3), cliponaxis=False,
             customdata=[r["detail"] for r in sub],
             hovertemplate="<b>%{y}</b><br>influence : %{x:.1f} %<br>%{customdata}<extra></extra>",
         ))
     top = max(r["share"] for r in rows)
     fig.update_layout(barmode="overlay", bargap=0.35,
-                      legend=dict(orientation="h", y=1.12, x=0, font=dict(size=10)),
-                      margin=dict(t=34, b=44, l=8, r=44))
+                      legend=dict(orientation="h", y=1.12, x=0, font=dict(size=8)),
+                      margin=dict(t=27.2, b=35.2, l=6.4, r=35.2))
     fig.update_xaxes(range=[0, max(top * 1.3, 10)], gridcolor=LINE, zeroline=False,
-                     ticksuffix=" %", tickfont=dict(family=MONO, size=10, color=INK3),
-                     title=dict(text="Part de l'influence sur la décision", font=dict(size=11)))
-    fig.update_yaxes(automargin=True, tickfont=dict(size=11, color=INK))
-    return _base_layout(fig, 340)
+                     ticksuffix=" %", tickfont=dict(family=MONO, size=8, color=INK3),
+                     title=dict(text="Part de l'influence sur la décision", font=dict(size=8.8)))
+    fig.update_yaxes(automargin=True, tickfont=dict(size=8.8, color=INK))
+    return _base_layout(fig, 272)

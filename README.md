@@ -2,7 +2,7 @@
 
 Ce tableau de bord Dash score en direct un flux de transactions Mobile Money avec **MKAN**. MKAN est un réseau récurrent dont les quatre portes LSTM sont remplacées par des couches de Kolmogorov-Arnold hybrides (bases gaussiennes et Fourier). Chaque décision est **expliquée**, journalisée et exportable sous la forme d'un rapport d'audit au format COBAC.
 
-> Projet réalisé dans le cadre d'un mémoire de Master 2 (ENSPD, Université de Douala, LIDIA Lab), en stage à la BEAC.
+> Projet réalisé dans le cadre d'un mémoire de Master 2 (ENSPD, Université de Douala, laboratoire GISDIA), en stage à la BEAC.
 
 ---
 

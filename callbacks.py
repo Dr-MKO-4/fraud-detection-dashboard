@@ -12,13 +12,12 @@ from __future__ import annotations
 import base64
 import datetime
 import io
-import queue
 import threading
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Input, Output, State, ctx, html, no_update
+from dash import ALL, Input, Output, State, ctx, html, no_update
 from dash.exceptions import PreventUpdate
 
 import time as _time
@@ -45,9 +44,9 @@ WARN   = "#C9A227"
 LINE   = "#EEF0F4"
 
 _BADGE_BASE: dict = {
-    "display": "inline-block", "padding": "6px 12px", "color": "#fff",
-    "fontFamily": "var(--mono)", "fontSize": "12px",
-    "fontWeight": 600, "letterSpacing": ".08em",
+    "display": "inline-block", "padding": "4.8px 9.6px", "color": "#fff",
+    "fontFamily": "var(--mono)", "fontSize": "9.6px",
+    "fontWeight": 600,
 }
 _BADGE_FRAUDE: dict = {**_BADGE_BASE, "backgroundColor": DANGER}
 _BADGE_NORMAL: dict = {**_BADGE_BASE, "backgroundColor": OK}
@@ -74,12 +73,24 @@ _rng = np.random.default_rng()    # RNG module-level  pas de re-création par ap
 # Seules les transactions à haut risque (score > _EXPLAIN_THRESHOLD) reçoivent
 # une explication complète, calculée par un thread séparé (_explain_worker)
 # qui ne bloque jamais la lecture, et patchée dans le journal une fois prête.
+# Pile bornée, décisions les plus récentes d'abord : un lot compte plus de comptes
+# que le journal n'a de lignes, une file FIFO visait des lignes déjà évincées.
 _EXPLAIN_THRESHOLD = 0.7
-_explain_queue: "queue.Queue" = queue.Queue()
+_explain_stack: deque = deque(maxlen=2000)
+_explain_ready = threading.Semaphore(0)
 _explain_pending: dict[int, dict] = {}   # entry id → {"driver", "contribution"}
 _explain_lock = threading.Lock()
 _entry_id_counter = 0
 _explain_thread_started = False
+
+
+def _dominant_variable(top_features: list) -> tuple[str, float]:
+    """Première variable d'entrée du classement : les états cachés h[k] sont
+    écartés, ils ne désignent aucune variable lisible par un auditeur."""
+    for f in top_features or []:
+        if not f["label"].startswith("h["):
+            return f["label"], f["contribution"]
+    return "", 0.0
 
 
 def _explain_worker() -> None:
@@ -89,23 +100,26 @@ def _explain_worker() -> None:
     dans store-journal par le tick suivant (_merge_explanations), ou par le
     callback merge_explanations quand le scoring est en pause."""
     while True:
-        entry_id, window = _explain_queue.get()
+        _explain_ready.acquire()
         try:
-            result = _inference.score(window)
-            top = result["top_features"][0] if result["top_features"] else None
-            driver     = top["label"]        if top else ""
-            contrib    = top["contribution"] if top else 0.0
+            entry_id, window = _explain_stack.pop()
+        except IndexError:      # entrée évincée par la borne de la pile
+            continue
+        try:
+            driver, contrib = _dominant_variable(_inference.score(window)["top_features"])
         except Exception:
             continue
-        finally:
-            _explain_queue.task_done()
         with _explain_lock:
             _explain_pending[entry_id] = {"driver": driver, "contribution": contrib}
 
 
 def init(buffer, inference) -> None:
-    global _buffer, _inference, _explain_thread_started
+    global _buffer, _inference, _explain_thread_started, W, _WINDOW_CELLS_CACHE
     _buffer, _inference = buffer, inference
+    # Longueur de fenêtre du modèle chargé (W=5 pour une GRUKANCell de la campagne, 10 sinon) :
+    # un compte n'est scoré que lorsque sa fenêtre atteint cette longueur.
+    W = int(getattr(inference, "W", W) or W)
+    _WINDOW_CELLS_CACHE = [_window_cells(lvl) for lvl in range(W + 1)]
     _live_ingest.set_reset_hook(lambda: (_buffer.flush_all(), _drift.reset()))
     if not _explain_thread_started:
         threading.Thread(target=_explain_worker, daemon=True).start()
@@ -616,7 +630,7 @@ def _process(account_id: str, features: list[float],
 
     score   = result["score"]
     verdict = result["verdict"]
-    driver  = result["top_features"][0]["label"] if result["top_features"] else ""
+    driver  = _dominant_variable(result["top_features"])[0]
 
     _buffer.push_score(account_id, score)
     _buffer.push_drift_score(score)
@@ -735,7 +749,8 @@ def _tick_batch(batch_cursor, account_id: str, journal: list, tau: float, totals
         # Au-delà du seuil à risque : explication complète déléguée au thread
         # séparé (_explain_worker), le journal est patché quand elle est prête.
         if sc_f > _EXPLAIN_THRESHOLD:
-            _explain_queue.put((eid, complete[acc]))
+            _explain_stack.append((eid, complete[acc]))
+            _explain_ready.release()
 
     n_scored = len(new_entries)
     n_alerts = int(is_fraud.sum()) if len(is_fraud) else 0
@@ -855,12 +870,9 @@ def register_callbacks(app) -> None:
         Output("gauge-meta",           "children"),
         Output("store-lots",           "data"),
         Input("auto-interval",         "n_intervals"),
-        Input("btn-inject-ato",        "n_clicks"),
-        Input("btn-inject-refund",     "n_clicks"),
-        Input("btn-inject-fake",       "n_clicks"),
-        Input("btn-inject-split",      "n_clicks"),
-        Input("btn-inject-smurf",      "n_clicks"),
-        Input("btn-inject-anomaly",    "n_clicks"),
+        # Boutons de scénario (vue Scoring seulement) : ALL renvoie une liste vide
+        # quand la vue n'est pas affichée, au lieu d'une erreur « objet inexistant ».
+        Input({"type": "inject", "btn": ALL}, "n_clicks"),
         State("store-cursor",          "data"),
         State("store-batch-cursor",    "data"),
         State("store-account-id",      "data"),
@@ -871,11 +883,16 @@ def register_callbacks(app) -> None:
         State("store-lots",            "data"),
         prevent_initial_call=True,
     )
-    def on_tick_or_inject(n_intervals,
-                          n_ato, n_refund, n_fake, n_split, n_smurf, n_anomaly,
+    def on_tick_or_inject(n_intervals, _inject_clicks,
                           cursor, batch_cursor, account_id, journal, cfg, totals,
                           last_result, store_lots):
         triggered  = ctx.triggered_id
+        if isinstance(triggered, dict):
+            # Un vrai clic seulement : quand la vue Scoring est redessinée, ses
+            # boutons apparaissent avec n_clicks = 0 et ne doivent rien injecter.
+            if not (ctx.triggered and ctx.triggered[0].get("value")):
+                raise PreventUpdate
+            triggered = triggered.get("btn")
         tau        = float((cfg or {}).get("tau", 0.5))
         cursor     = int(cursor or 0)
         journal    = journal or []
@@ -898,6 +915,10 @@ def register_callbacks(app) -> None:
         acc = inspected_account(account_id)
         if not acc:
             raise PreventUpdate   # aucun compte actif pour l'instant
+        # Les profils de scénario décrivent les 12 variables calculées : sans objet
+        # pour un modèle du régime brut (colonnes brutes + type d'opération).
+        if not _inference.accepts_engineered():
+            raise PreventUpdate
         features   = _scenario_features(_SCENARIO_BTN_MAP[triggered])
         new_cursor = cursor + 1
         window     = _buffer.push(acc, features)
@@ -947,10 +968,10 @@ def register_callbacks(app) -> None:
     )
     def update_stream_status(live_state, paused):
         if not (live_state or {}).get("connected"):
-            return "mk-dot mk-dot--paused", "FLUX DÉCONNECTÉ"
+            return "mk-dot mk-dot--paused", "Flux déconnecté"
         if paused:
-            return "mk-dot mk-dot--paused", "SCORING EN PAUSE"
-        return "mk-dot mk-dot--live", "SCORING EN COURS"
+            return "mk-dot mk-dot--paused", "Scoring en pause"
+        return "mk-dot mk-dot--live", "Scoring en cours"
 
     # ── 4ter · Sync inp-account-id → store-account-id (persistance inter-vues) ─
     @app.callback(
@@ -1055,15 +1076,20 @@ def register_callbacks(app) -> None:
         Input("store-lots",        "data"),     # écrit dans la même réponse que la jauge
         State("store-account-id",  "data"),
         State("store-config",      "data"),
+        State("tab-content",       "children"),
         prevent_initial_call=True,
     )
-    def update_tab(tab, _slow, store_lots, account_id, cfg):
+    def update_tab(tab, _slow, store_lots, account_id, cfg, content):
         tau_cur = float((cfg or {}).get("tau", 0.5))
         from dash import dcc as _dcc
         btn_hidden = {"display": "none"}
         btn_show   = {"display": "block"}
         acc        = inspected_account(account_id) or ""
-        if ctx.triggered_id == "store-lots" and tab != "tab-history":
+        # Plusieurs entrées peuvent se déclencher dans la même requête (changement d'onglet et
+        # rafraîchissement à 1 Hz, après reconstruction de la vue) : on regarde toutes les
+        # entrées déclenchées, pas seulement la première.
+        declencheurs = {t["prop_id"].split(".")[0] for t in (ctx.triggered or [])}
+        if declencheurs <= {"store-lots"} and tab != "tab-history":
             raise PreventUpdate
 
         if tab == "tab-history":
@@ -1123,9 +1149,9 @@ def register_callbacks(app) -> None:
                                      else last["clock"]) + ")"),
                            gridcolor=LINE, nticks=8),
                 legend=dict(orientation="h", y=1.15, x=0),
-                height=240, margin=dict(t=30, b=44, l=56, r=20),
+                height=192, margin=dict(t=24, b=35.2, l=44.8, r=16),
                 paper_bgcolor="white", plot_bgcolor="white",
-                font=dict(family="IBM Plex Sans, sans-serif", size=11, color=INK),
+                font=dict(family="IBM Plex Sans, sans-serif", size=8.8, color=INK),
             )
             help_ = chart_help(
                 "Pour chaque lot de transactions scoré (un point), le pourcentage de comptes "
@@ -1168,13 +1194,13 @@ def register_callbacks(app) -> None:
                                line=dict(color=DANGER, width=1.5, dash="dot")),
                 ])
                 fig.update_layout(
-                    height=240, margin=dict(t=10, b=70, l=56, r=20),
+                    height=192, margin=dict(t=8, b=56, l=44.8, r=16),
                     yaxis=dict(title="Divergence JS (bits)", rangemode="tozero", gridcolor=LINE),
                     xaxis=dict(title="Rang du dernier score de la fenêtre (les plus récents à droite)",
                                gridcolor=LINE),
                     legend=dict(orientation="h", y=-0.35, x=0),
                     paper_bgcolor="white", plot_bgcolor="white",
-                    font=dict(family="IBM Plex Sans, sans-serif", size=11, color=INK))
+                    font=dict(family="IBM Plex Sans, sans-serif", size=8.8, color=INK))
                 _drift_tab_cache["version"], _drift_tab_cache["fig"] = version, fig
             help_ = chart_help(
                 "À quel point la distribution des 500 derniers scores s'éloigne de celle des "
@@ -1193,10 +1219,11 @@ def register_callbacks(app) -> None:
                              help_]), btn_hidden
 
         if tab == "tab-symbolic":
-            # Le rafraîchissement à 1 Hz ne doit pas écraser le rapport généré : on
-            # n'affiche l'invite que lorsque l'utilisateur ouvre l'onglet.
-            if ctx.triggered_id == "slow-interval":
-                raise PreventUpdate
+            # Le bouton est toujours visible sur cet onglet. Le rafraîchissement à 1 Hz ne
+            # doit pas écraser un rapport déjà généré : sans changement d'onglet, on ne
+            # remplit le contenu que s'il est vide (vue reconstruite).
+            if "tabs-bottom" not in declencheurs and content:
+                return no_update, btn_show
             return _waiting(
                 "Cliquez sur « Générer le rapport COBAC » pour lancer l'extraction "
                 "symbolique (~5-30 s selon la complexité du modèle)."
@@ -1206,5 +1233,5 @@ def register_callbacks(app) -> None:
 
 
 def _waiting(msg: str) -> html.P:
-    return html.P(msg, style={"fontSize": "13.5px", "color": INK4,
+    return html.P(msg, style={"fontSize": "10.8px", "color": INK4,
                                "lineHeight": 1.65, "maxWidth": "58ch"})
