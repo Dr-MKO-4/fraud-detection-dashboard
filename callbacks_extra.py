@@ -228,6 +228,19 @@ def _textes_campagne(inference) -> None:
 
 
 def register_extra(app, buffer=None, inference=None) -> None:
+    # Changement de modèle à chaud (vue Environnement)
+    @app.callback(Output("modele-statut", "children"), Output("lbl-checkpoint", "children"),
+                  Input("sel-modele", "value"), prevent_initial_call=True)
+    def changer_modele(fichier):
+        from dashboard import modele as _modele
+        if not fichier or inference is None or not hasattr(inference, "actuel"):
+            raise PreventUpdate
+        try:
+            msg = _modele.changer(inference, buffer, fichier)
+        except Exception as exc:   # modèle illisible : on garde le modèle courant
+            return f"Chargement impossible ({exc}) : le modèle courant est conservé.", no_update
+        return msg, f"checkpoint {inference.checkpoint_name}"
+
     global W_MODELE
     W_MODELE = int(getattr(inference, "W", 10) or 10)
     if inference is not None and getattr(inference, "format", "") == "campagne":

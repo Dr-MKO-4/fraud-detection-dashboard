@@ -166,7 +166,7 @@ def _header() -> html.Header:
             _tele("Seuil τ",          "tele-tau"),
             html.Div(style={"flex": 1}),
             html.Div([
-                html.Span(f"checkpoint {CHECKPOINT_NOM}",
+                html.Span(f"checkpoint {CHECKPOINT_NOM}", id="lbl-checkpoint",
                           style={"fontFamily": "var(--mono)", "fontSize": "8.4px",
                                  "color": "var(--ink-4)"}),
                 html.A("Journal d'audit", href="#", id="link-audit",
@@ -657,8 +657,26 @@ def _view_audit() -> html.Div:
 
 # ── Vue 6 : environnement ────────────────────────────────────────────────────
 
+def _bloc_modele() -> html.Div:
+    """Choix du modèle de scoring parmi le catalogue (modèle historique et finalistes entraînés)."""
+    from dashboard.modele import catalogue
+    cat = catalogue()
+    return html.Div([
+        _kicker("Modèle de scoring",
+                help="Le modèle historique et, pour chaque finaliste de l'entraînement final, le modèle "
+                     "de la graine au score de détection médian sur la validation. Changer de modèle "
+                     "vide les fenêtres : chaque compte est de nouveau scoré après W transactions du "
+                     "nouveau modèle."),
+        dcc.Dropdown(id="sel-modele", value=CHECKPOINT_NOM, clearable=False, searchable=False,
+                     options=[{"label": m["libelle"], "value": m["fichier"]} for m in cat["modeles"]]),
+        html.Div(id="modele-statut", className="mk-num",
+                 style={"fontSize": "9.6px", "color": "var(--ink-3)", "lineHeight": 1.6}),
+    ], style={"display": "flex", "flexDirection": "column", "gap": "8px", "marginBottom": "16px"})
+
+
 def _view_env() -> html.Div:
     return html.Div([
+        _bloc_modele(),
         html.Div([
             html.Div([
                 _kicker("Mode d'exécution"),

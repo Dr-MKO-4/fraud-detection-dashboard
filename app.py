@@ -25,11 +25,10 @@ from dashboard import callbacks, callbacks_extra
 
 register_plotly_theme()   # avant toute figure : toutes en héritent
 
-# Modèle par défaut : finaliste de l'entraînement final (GRUKANCell traitée DoG/DoG/DoG, retenue par la
-# règle préenregistrée, graine de score perf médian). Le modèle historique reste disponible :
-#   python -m dashboard.app --checkpoint MKAN/checkpoints/mkan_final.pt
-CHECKPOINT_FINALISTE = _ROOT / "MKAN" / "checkpoints" / "finaliste_gru_dog_dog_dog_s1.pt"
-CHECKPOINT_HISTORIQUE = _ROOT / "MKAN" / "checkpoints" / "mkan_final.pt"
+# Modèle par défaut : celui que désigne MKAN/checkpoints/modeles_tableau_de_bord.json (« defaut »).
+# Les autres modèles du catalogue (finalistes de l'entraînement final) se choisissent à chaud dans la vue
+# Environnement, ou au lancement : python -m dashboard.app --checkpoint MKAN/checkpoints/<fichier>.pt
+from dashboard import modele as _modele
 
 # ── Parsing des arguments ─────────────────────────────────────────────────────
 
@@ -41,14 +40,14 @@ parser.add_argument("--debug", action="store_true",
 parser.add_argument("--port",  type=int, default=8050, help="Port HTTP (défaut 8050)")
 parser.add_argument("--host",  default="0.0.0.0",      help="Hôte (défaut 0.0.0.0)")
 parser.add_argument("--checkpoint", default=None,
-                    help="Modèle à charger (défaut : finaliste GRU DoG/DoG/DoG, sinon mkan_final.pt)")
+                    help="Modèle à charger (défaut : celui du catalogue modeles_tableau_de_bord.json)")
 args, _ = parser.parse_known_args()
 if args.checkpoint:
     CHECKPOINT = Path(args.checkpoint)
     if not CHECKPOINT.is_absolute():
         CHECKPOINT = _ROOT / CHECKPOINT
 else:
-    CHECKPOINT = CHECKPOINT_FINALISTE if CHECKPOINT_FINALISTE.exists() else CHECKPOINT_HISTORIQUE
+    CHECKPOINT = _modele.DOSSIER / _modele.catalogue()["defaut"]
 
 # ── Buffer : Redis par défaut, FallbackBuffer si absent ou --no-redis ─────────
 
@@ -80,37 +79,10 @@ except FileNotFoundError:
     print("      Placez mkan_final.pt dans MKAN/checkpoints/ et relancez.")
     sys.exit(1)
 
-# Checkpoint de la campagne : longueur de fenêtre et vecteur d'entrée propres au modèle
-# (régime brut ou traité), prétraitement relu depuis le checkpoint (correctif P4).
-if getattr(inference, "W", 10) != buffer.W:
-    print(f"[INFO] Fenêtre du modèle W={inference.W} (buffer réglé en conséquence)")
-    buffer.W = inference.W
-if inference.format == "campagne":
-    print(f"[OK] Format campagne : cellule {inference.cell_type}, régime {inference.regime}, "
-          f"prétraitement relu depuis le checkpoint")
-    from dashboard import live_ingest as _li
-    _li.set_vector_builder(inference.vector_from_row)
-
-from dashboard import layout as _layout
-_layout.W_MODELE = int(inference.W)
-_layout.W = int(inference.W)
-_layout.CHECKPOINT_NOM = inference.checkpoint_name
-if inference.format == "campagne":
-    _d = inference.description()
-    _layout.BASES_MODELE = _d["bases"]
-    if inference.cell_type == "gru":
-        _layout.PORTES_MODELE = [("#0F6FB8", "Porte reset"), ("#2F7D5B", "Porte update"),
-                                 ("#C9A227", "Porte candidat")]
-    # Cartes d'étapes de la vue Modèle (liste partagée avec callbacks_extra : modifiée en place)
-    _layout.STAGES[:] = [
-        ("input", "Entrée", f"{_d['n_variables']} × {_d['W']}", "features × W"),
-        ("norm", "Normalisation", "log signé + z", "relue dans le checkpoint"),
-        ("cell", "Cellule MKAN", f"hidden {_d['hidden']}", f"{_d['n_portes']} portes KAN"),
-        ("basis", "Base", "une par porte", _d["bases"]),
-        ("head", "Tête", "linéaire", f"{_d['hidden']} → 1"),
-        ("out", "Sortie", "σ(z) ∈ [0,1]", "seuil τ"),
-    ]
-_layout.CELLULE_MODELE = {"gru": "GRUKANCell", "lstm": "TKANCell"}.get(inference.cell_type, "TKANCell")
+# Tout ce qui dépend du modèle (fenêtre W, vecteur d'entrée, vues, textes) est réglé par
+# modele.configurer, au démarrage comme à chaque changement de modèle à chaud.
+inference = _modele.ModeleCourant(inference)
+_modele.configurer(inference.actuel, buffer)
 print(f"[OK] Modèle : {inference.description()['resume']} ({inference.checkpoint_name})")
 
 callbacks.init(buffer, inference)
@@ -152,7 +124,7 @@ app.index_string = """
   </body>
 </html>
 """
-app.layout = build_layout()
+app.layout = build_layout   # reconstruite à chaque chargement de page : reflète le modèle courant
 callbacks.register_callbacks(app)
 callbacks_extra.register_extra(app, buffer=buffer, inference=inference)
 
