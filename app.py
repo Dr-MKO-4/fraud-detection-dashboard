@@ -9,8 +9,12 @@ Modes de lancement (depuis m:\\Ecole\\Mémoire\\Modelisation) :
 """
 
 import argparse
+import logging
 import sys
 from pathlib import Path
+
+# Une ligne par requête du navigateur (plusieurs par seconde) gonflait Dashboard.err.log : seules les erreurs restent.
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
@@ -39,6 +43,8 @@ parser.add_argument("--debug", action="store_true",
                     help="Mode debug Dash (hot-reload, messages d'erreur complets)")
 parser.add_argument("--port",  type=int, default=8050, help="Port HTTP (défaut 8050)")
 parser.add_argument("--host",  default="0.0.0.0",      help="Hôte (défaut 0.0.0.0)")
+parser.add_argument("--rest-url", default=None,
+                    help="Adresse REST du producteur (défaut http://127.0.0.1:8766/live/transactions)")
 parser.add_argument("--checkpoint", default=None,
                     help="Modèle à charger (défaut : celui du catalogue modeles_tableau_de_bord.json)")
 args, _ = parser.parse_known_args()
@@ -76,7 +82,7 @@ try:
           f"features={len(inference.feature_cols)})")
 except FileNotFoundError:
     print(f"[ERR] Checkpoint introuvable : {CHECKPOINT}")
-    print("      Placez mkan_final.pt dans MKAN/checkpoints/ et relancez.")
+    print("      Placez le checkpoint du catalogue (modeles_tableau_de_bord.json) dans MKAN/checkpoints/ et relancez.")
     sys.exit(1)
 
 # Tout ce qui dépend du modèle (fenêtre W, vecteur d'entrée, vues, textes) est réglé par
@@ -91,6 +97,10 @@ callbacks.init(buffer, inference)
 
 from dashboard import live_ingest
 
+if args.rest_url:
+    live_ingest.DEMO_ENDPOINTS["rest_url"] = args.rest_url
+    if hasattr(live_ingest, "_endpoints"):
+        live_ingest._endpoints["rest_url"] = args.rest_url
 live_ingest.start("rest")
 print(f"[OK] Ingestion live démarrée (REST {live_ingest.DEMO_ENDPOINTS['rest_url']})")
 print("     Lancez le producteur : cd MOMTSIM && python run_live.py")

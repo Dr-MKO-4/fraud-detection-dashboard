@@ -45,7 +45,7 @@ LINE   = "#EEF0F4"
 
 _BADGE_BASE: dict = {
     "display": "inline-block", "padding": "4.8px 9.6px", "color": "#fff",
-    "fontFamily": "var(--mono)", "fontSize": "9.6px",
+    "fontFamily": "var(--mono)", "fontSize": "12px",
     "fontWeight": 600,
 }
 _BADGE_FRAUDE: dict = {**_BADGE_BASE, "backgroundColor": DANGER}
@@ -1151,7 +1151,7 @@ def register_callbacks(app) -> None:
                 legend=dict(orientation="h", y=1.15, x=0),
                 height=192, margin=dict(t=24, b=35.2, l=44.8, r=16),
                 paper_bgcolor="white", plot_bgcolor="white",
-                font=dict(family="IBM Plex Sans, sans-serif", size=8.8, color=INK),
+                font=dict(family="IBM Plex Sans, sans-serif", size=11, color=INK),
             )
             help_ = chart_help(
                 "Pour chaque lot de transactions scoré (un point), le pourcentage de comptes "
@@ -1200,7 +1200,7 @@ def register_callbacks(app) -> None:
                                gridcolor=LINE),
                     legend=dict(orientation="h", y=-0.35, x=0),
                     paper_bgcolor="white", plot_bgcolor="white",
-                    font=dict(family="IBM Plex Sans, sans-serif", size=8.8, color=INK))
+                    font=dict(family="IBM Plex Sans, sans-serif", size=11, color=INK))
                 _drift_tab_cache["version"], _drift_tab_cache["fig"] = version, fig
             help_ = chart_help(
                 "À quel point la distribution des 500 derniers scores s'éloigne de celle des "
@@ -1233,5 +1233,5 @@ def register_callbacks(app) -> None:
 
 
 def _waiting(msg: str) -> html.P:
-    return html.P(msg, style={"fontSize": "10.8px", "color": INK4,
+    return html.P(msg, style={"fontSize": "13.5px", "color": INK4,
                                "lineHeight": 1.65, "maxWidth": "58ch"})

@@ -6,8 +6,7 @@ qui délègue tout au modèle actuellement chargé. Changer de modèle remplace 
 ce qui en dépend : longueur de fenêtre W (buffer vidé, scoring, vues), vecteur d'entrée du flux,
 textes et cartes de la vue Modèle, nom du checkpoint affiché.
 
-Le catalogue des modèles proposés est MKAN/checkpoints/modeles_tableau_de_bord.json : le modèle
-historique et, pour chaque finaliste de la règle du 06/11, le modèle de la graine au score perf
+Le catalogue des modèles proposés est MKAN/checkpoints/modeles_tableau_de_bord.json : pour chaque finaliste de la règle du 06/11, le modèle de la graine au score perf
 médian sur la validation.
 """
 
@@ -29,8 +28,8 @@ def catalogue() -> dict:
     try:
         cat = json.loads(CATALOGUE.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        cat = {"defaut": "mkan_final.pt",
-               "modeles": [{"fichier": "mkan_final.pt", "libelle": "Modèle historique"}]}
+        cat = {"defaut": "finaliste_gru_dog_dog_dog_s1.pt",
+               "modeles": [{"fichier": "finaliste_gru_dog_dog_dog_s1.pt", "libelle": "Finaliste GRU DoG/DoG/DoG"}]}
     cat["modeles"] = [m for m in cat["modeles"] if (DOSSIER / m["fichier"]).exists()]
     return cat
 
@@ -68,6 +67,7 @@ def configurer(inference, buffer) -> None:
     layout.W = layout.W_MODELE = W
     layout.CHECKPOINT_NOM = inference.checkpoint_name
     layout.CELLULE_MODELE = {"gru": "GRUKANCell", "lstm": "TKANCell"}.get(inference.cell_type, "TKANCell")
+    layout.DESCRIPTION_MODELE = inference.description()
     callbacks.W = W
     callbacks._WINDOW_CELLS_CACHE = [callbacks._window_cells(n) for n in range(W + 1)]
     callbacks_extra.W_MODELE = W

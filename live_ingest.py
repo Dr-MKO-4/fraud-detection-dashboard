@@ -41,6 +41,11 @@ REST_POLL_SECONDS = 0.5
 REST_PAGE = 20000
 STEP_IDLE_SECONDS = 2.0     # un step est considéré complet après ce silence
 _PENDING_MAX = 300
+# Rattrapage (17/11) : tant que le transport ramène des pages pleines, il reste de l'historique à lire. Ces
+# transactions mettent à jour les caractéristiques et préremplissent les fenêtres, comme l'échauffement, sans
+# être scorées : sinon un modèle plus lent que le flux score le passé, de plus en plus en retard, et la file
+# bornée jette des lots, ce qui fausse la dérive des scores.
+_rattrapage = False
 
 _pending: "queue.Queue[tuple]" = queue.Queue()
 _thread: threading.Thread | None = None
@@ -153,6 +158,14 @@ def _reset_stream() -> None:
             break
 
 
+def _set_rattrapage(actif: bool) -> None:
+    """Active le rattrapage tant qu'il reste de l'historique à lire ; état visible dans live_status()."""
+    global _rattrapage
+    if actif != _rattrapage:
+        _rattrapage = actif
+        _mark(rattrapage=actif)
+
+
 def _receive(rows: list[dict]) -> None:
     """Encaisse les transactions reçues (rapide, non bloquant)."""
     global _max_seen, _last_row_time, _cur_run
@@ -199,7 +212,7 @@ def _emit_step(step: int, rows: list[dict]) -> None:
     live_acc, live_mat, live_meta = [], [], []
     for r, f in zip(rows, feats):
         acc = str(r["nameOrig"])
-        if r.get("warmup"):
+        if r.get("warmup") or _rattrapage:
             _prefill[acc].append(f)
             continue
         live_acc.append(acc)
@@ -255,6 +268,7 @@ def _run_rest() -> None:
             rows = payload.get("transactions", [])
             got = len(rows)
             since_id = payload.get("last_id", since_id)
+            _set_rattrapage(got >= REST_PAGE)
             if rows:
                 for r in rows:
                     r.setdefault("run_id", run_id)
@@ -304,6 +318,7 @@ def _run_kafka() -> None:
             _stop.wait(1.0)
             continue
         batch = [rec.value for recs in polled.values() for rec in recs]
+        _set_rattrapage(len(batch) >= 20000)
         if batch:
             _count(len(batch))
             _mark(warmup_rows=_state["warmup_rows"] + sum(1 for r in batch if r.get("warmup")))

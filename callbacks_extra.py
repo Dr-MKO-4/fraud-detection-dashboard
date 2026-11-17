@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import io
+import json
 
 import numpy as np
 import plotly.graph_objects as go
@@ -33,7 +34,7 @@ _spline_cache: dict = {}   # {id(inference): (grid_html, norm_tbl_html)}
 ACCENT, DANGER, OK, WARN, VIOLET = "#0F6FB8", "#C2334D", "#2F7D5B", "#C9A227", "#7A5AA8"
 LINE = "#EEF0F4"
 W_MODELE = 10   # longueur de fenêtre du modèle chargé, fixée par register_extra
-MONO = dict(family="IBM Plex Mono, monospace", size=11, color=INK3)
+MONO = dict(family="IBM Plex Mono, monospace", size=13.8, color=INK3)
 
 STAGE_TEXT = {
     "input": ("La fenêtre glissante brute",
@@ -59,11 +60,127 @@ STAGE_TEXT = {
 }
 
 
+
+# ── Évaluation du mémoire pour le modèle chargé (17/11) ──────────────────────
+# MKAN/checkpoints/explications_tableau_de_bord.json, produit par
+# MKAN/Etude_benchmarck/export_explications_dashboard.py à partir des analyses du mémoire (validation seulement).
+_EXPLICATIONS = {"mtime": None, "data": {}}
+_FAMILLES = {"x^2": "({u})²", "sqrt(|x|)": "√|{u}|", "sin(x)": "sin({u})", "exp(x)": "exp({u})",
+             "log(|x|+eps)": "ln|{u}|", "1/(x+eps)": "1/({u})", "|x|": "|{u}|", "x": "({u})", "cos(x)": "cos({u})",
+             "tanh(x)": "tanh({u})", "x^3": "({u})³", "sigmoid(x)": "σ({u})", "softplus(x)": "softplus({u})"}
+_SCENARIOS = [("ATO", "Account Takeover"), ("SMURFING", "Smurfing"), ("SPLIT_DEP", "Split Deposit"),
+              ("REFUND", "Refund Fraud"), ("FAKE_CRED", "Fake Credentials")]
+
+
+def _fr(x, nd=3):
+    return f"{x:.{nd}f}".replace(".", ",")
+
+
+def explications_modele(checkpoint: str):
+    """Mesures du mémoire pour ce checkpoint, ou None (modèle non évalué dans le mémoire)."""
+    from .modele import DOSSIER
+    chemin = DOSSIER / "explications_tableau_de_bord.json"
+    try:
+        m = chemin.stat().st_mtime
+        if _EXPLICATIONS["mtime"] != m:
+            _EXPLICATIONS.update(mtime=m, data=json.loads(chemin.read_text(encoding="utf-8")).get("modeles", {}))
+    except (OSError, ValueError):
+        return None
+    return _EXPLICATIONS["data"].get(checkpoint)
+
+
+def _formule(e: dict) -> str:
+    """c · f(a·x + b) + d, lisible (x = valeur normalisée de la variable)."""
+    sb = "−" if e["b"] < 0 else "+"
+    u = f"{_fr(e['a'])}·x {sb} {_fr(abs(e['b']))}"
+    sd = "−" if e["d"] < 0 else "+"
+    return f"{_fr(e['c'])} · {_FAMILLES.get(e['famille'], e['famille'] + '({u})').format(u=u)} {sd} {_fr(abs(e['d']))}"
+
+
+def section_evaluation_memoire(checkpoint: str, numero: int) -> list:
+    """Section du rapport COBAC : ce que l'évaluation du mémoire établit pour le modèle chargé."""
+    from .layout import FEATURE_LABELS
+    ex = explications_modele(checkpoint)
+    titre = html.H2(f"{numero} · Évaluation du modèle dans le mémoire (validation, test non lu)")
+    if not ex:
+        return [titre, html.P("Ce modèle n'a pas été évalué dans le mémoire : aucune mesure de fidélité, de rappel par "
+                              "scénario ni de précision à proportion de fraude réaliste n'est disponible. Les finalistes "
+                              "du catalogue le sont.")]
+    v = ex["validation"]
+    blocs = [titre, _table(["Mesure", "Valeur"], [
+        ["MCC (validation complète)", _fr(v["mcc"], 4)], ["PR-AUC", _fr(v["auc_pr"], 4)], ["Brier", _fr(v["brier"], 4)],
+        ["R² symbolique au seuil 0,80 (norme L1 / attribution)",
+         f"{_fr(v['r2_l1_080'])} / {_fr(v['r2_attribution_080'])}" if v.get("r2_attribution_080") is not None else _fr(v["r2_l1_080"])],
+        ["Latence pour 256 fenêtres, machine de la campagne", f"{_fr(v['latence_aws_ms'], 1)} ms"]], ["left", "right"])]
+    f = ex.get("fidelite")
+    if f:
+        blocs += [html.Div("Fonctions d'arête symbolisées : les six arêtes les plus fortes partant d'une variable",
+                           className="mk-kicker", style={"marginTop": "14.4px"}),
+                  _table(["Porte", "Variable", "Meilleure formule (x normalisée)", "R²"],
+                         [[a["porte"], FEATURE_LABELS.get(a["variable"], a["variable"]), _formule(a), _fr(a["r2"])]
+                          for a in f["aretes_fortes"]], ["left", "left", "left", "right"]),
+                  html.P(f"{f['aretes_actives']} arêtes actives sur {f['aretes_total']} ; "
+                         f"{_fr(100 * f['part_symb_080'], 1)} % se symbolisent au seuil 0,80 et "
+                         f"{_fr(100 * f['part_symb_099'], 1)} % au seuil 0,99.",
+                         style={"fontSize": "12px", "color": INK3})]
+        noms = {"elagage": "Élagage (arêtes actives seules)",
+                "formules_dans_domaine_080": "Formules R² ≥ 0,80 sur [−2, 2], autres arêtes apprises",
+                "formules_080": "Formules R² ≥ 0,80 sur tout le domaine, autres arêtes apprises",
+                "formules_seules_080": "Formules R² ≥ 0,80 seules",
+                "aretes_40": "40 arêtes les plus fortes seules"}
+        var = f["variantes"]
+        blocs += [html.Div("Fidélité au réseau complet (accord des décisions au seuil 0,5)", className="mk-kicker",
+                           style={"marginTop": "14.4px"}),
+                  _table(["Variante", "Arêtes", "Accord", "MCC"],
+                         [[noms[k], str(var[k]["aretes"]), f"{_fr(100 * var[k]['accord'], 1)} %", _fr(var[k]["mcc"])]
+                          for k in noms if k in var], ["left", "right", "right", "right"])]
+    s = ex.get("scenarios")
+    if s:
+        blocs += [html.Div("Rappel par scénario de fraude (seuil 0,5)", className="mk-kicker", style={"marginTop": "14.4px"}),
+                  _table([n for _, n in _SCENARIOS], [[_fr(s[k]) for k, _ in _SCENARIOS]], ["right"] * len(_SCENARIOS))]
+    pv = ex.get("prevalence")
+    if pv:
+        fausses = f"{int(round(pv['fausses_alertes_par_million_0.1pc'], -2)):,}".replace(",", " ")
+        blocs += [html.P(f"Proportion de fraude réaliste : avec un taux de faux positifs de {_fr(100 * pv['taux_faux_positifs'], 2)} %, "
+                         f"la précision attendue serait de {_fr(pv['precision_0.1pc'])} à 0,1 % de fraude "
+                         f"(environ {fausses} fausses alertes par million de "
+                         f"transactions) et de {_fr(pv['precision_1pc'])} à 1 %.",
+                         style={"fontSize": "12px", "color": INK3, "marginTop": "8px"})]
+    return blocs
+
+
+def reserves_memoire(checkpoint: str, numero: int) -> list:
+    """Réserves supplémentaires tirées de l'évaluation du mémoire."""
+    ex = explications_modele(checkpoint)
+    if not ex:
+        return []
+    out = []
+    k = 4
+    f = ex.get("fidelite")
+    if f and "formules_seules_080" in f["variantes"]:
+        out.append(html.P(f"{numero}.{k}  Les formules d'arête décrivent le modèle, elles ne le remplacent pas : seules, "
+                          f"elles reproduisent la décision du réseau dans "
+                          f"{_fr(100 * f['variantes']['formules_seules_080']['accord'], 1)} % des cas. La décision reste "
+                          f"celle du réseau élagué ({f['aretes_actives']} arêtes actives)."))
+        k += 1
+    pv = ex.get("prevalence")
+    if pv:
+        out.append(html.P(f"{numero}.{k}  Le seuil τ est réglé sur des données simulées à environ 20 % de fraude. À une "
+                          f"proportion réaliste (0,1 %), la précision tomberait à {_fr(pv['precision_0.1pc'])} : le seuil "
+                          f"doit être recalibré avant tout usage réel."))
+        k += 1
+    s = ex.get("scenarios")
+    if s:
+        out.append(html.P(f"{numero}.{k}  Le scénario Fake Credentials, presque absent des données d'entraînement, n'est "
+                          f"détecté qu'à {_fr(100 * s['FAKE_CRED'], 1)} % ; les décisions de ce modèle ne couvrent pas "
+                          f"cette typologie."))
+    return out
+
 # ── Helpers de rendu ─────────────────────────────────────────────────────────
 
 def _theme(fig: go.Figure, height: int) -> go.Figure:
     fig.update_layout(height=height, paper_bgcolor="white", plot_bgcolor="white",
-                      font=dict(family="IBM Plex Sans, sans-serif", size=9.6, color=INK),
+                      font=dict(family="IBM Plex Sans, sans-serif", size=12, color=INK),
                       margin=dict(t=8, b=28.8, l=38.4, r=12.8), showlegend=False)
     fig.update_xaxes(gridcolor=LINE, zeroline=False, tickfont=MONO)
     fig.update_yaxes(gridcolor=LINE, zeroline=False, tickfont=MONO)
@@ -74,8 +191,8 @@ def _kpi(key: str, value: str, detail: str = "", color: str = INK) -> html.Div:
     return html.Div([
         html.Span(key, className="mk-kicker", style={"whiteSpace": "nowrap"}),
         html.Span(value, className="mk-num",
-                  style={"fontSize": "17.6px", "fontWeight": 600, "color": color}),
-        html.Span(detail, style={"fontSize": "9.2px", "color": INK4, "whiteSpace": "nowrap"}),
+                  style={"fontSize": "19.7px", "fontWeight": 600, "color": color}),
+        html.Span(detail, style={"fontSize": "11.5px", "color": INK4, "whiteSpace": "nowrap"}),
     ], style={"display": "flex", "flexDirection": "column", "gap": "3.2px"})
 
 
@@ -125,8 +242,8 @@ def _render_profile(user: dict):
 
     from dash import dcc, html
     _row = lambda k, v: html.Div([
-        html.Span(k, style={"fontSize": "9.6px", "color": INK3, "minWidth": "128px"}),
-        html.Span(v, className="mk-num", style={"fontSize": "9.6px", "fontWeight": 600}),
+        html.Span(k, style={"fontSize": "12px", "color": INK3, "minWidth": "128px"}),
+        html.Span(v, className="mk-num", style={"fontSize": "12px", "fontWeight": 600}),
     ], style={"display": "flex", "gap": "9.6px", "padding": "6.4px 0",
               "borderBottom": f"1px solid {LINE}"})
 
@@ -138,13 +255,13 @@ def _render_profile(user: dict):
                     "width": "52.8px", "height": "52.8px", "flex": "none",
                     "border": f"1px solid {INK}", "display": "grid",
                     "placeItems": "center", "fontFamily": "IBM Plex Mono, monospace",
-                    "fontSize": "16px", "fontWeight": 600,
+                    "fontSize": "17.9px", "fontWeight": 600,
                 }),
                 html.Div([
-                    html.Div(name, style={"fontSize": "15.2px", "fontWeight": 600}),
-                    html.Div(role, style={"fontSize": "10.4px", "color": INK3}),
+                    html.Div(name, style={"fontSize": "17px", "fontWeight": 600}),
+                    html.Div(role, style={"fontSize": "13px", "color": INK3}),
                     html.Div(email, className="mk-num",
-                             style={"fontSize": "8.8px", "color": INK4}),
+                             style={"fontSize": "11px", "color": INK4}),
                 ], style={"display": "flex", "flexDirection": "column", "gap": "4px"}),
             ], style={"display": "flex", "gap": "16px", "flexWrap": "wrap"}),
 
@@ -163,12 +280,12 @@ def _render_profile(user: dict):
                                         {"label": " Palier 3 seul","value": "t3"},
                                         {"label": " Toutes",       "value": "all"}],
                                labelStyle={"display": "inline-block",
-                                           "marginRight": "14.4px", "fontSize": "10px"}),
+                                           "marginRight": "14.4px", "fontSize": "12.5px"}),
             ], style={"display": "flex", "flexDirection": "column", "gap": "8px"}),
 
             html.Button("Se déconnecter", id="btn-logout", n_clicks=0,
                         className="btn btn-secondary",
-                        style={"alignSelf": "flex-start", "fontSize": "9.6px"}),
+                        style={"alignSelf": "flex-start", "fontSize": "12px"}),
         ], style={"display": "flex", "flexDirection": "column", "gap": "24px",
                   "minWidth": 0}),
 
@@ -180,12 +297,12 @@ def _render_profile(user: dict):
                         f"{uid}|{now}".encode()
                     ).hexdigest()[:32] + "…",
                     className="mk-num",
-                    style={"fontSize": "8.8px", "color": INK3, "wordBreak": "break-all"},
+                    style={"fontSize": "11px", "color": INK3, "wordBreak": "break-all"},
                 ),
                 html.Div(
                     "Calculée sur id utilisateur + heure de connexion. "
                     "Attachée à chaque rapport COBAC généré dans cette session.",
-                    style={"fontSize": "9.2px", "color": INK4, "lineHeight": 1.6},
+                    style={"fontSize": "11.5px", "color": INK4, "lineHeight": 1.6},
                 ),
             ], style={"display": "flex", "flexDirection": "column", "gap": "6.4px",
                       "padding": "12.8px", "border": f"1px solid {LINE}",
@@ -288,7 +405,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                 html.Div("Le passage en mode LIVE branche le scoring sur le flux de production et "
                          "rend chaque décision opposable au titre du dossier COBAC. Le journal "
                          "d'audit devient non purgeable.",
-                         style={"fontSize": "10.4px", "lineHeight": 1.65, "maxWidth": "64ch"}),
+                         style={"fontSize": "13px", "lineHeight": 1.65, "maxWidth": "64ch"}),
                 html.Button("CONFIRMER LE BASCULEMENT", id="btn-confirm-live", n_clicks=0,
                             className="btn btn-danger"),
             ], style={"display": "flex", "flexDirection": "column", "gap": "9.6px",
@@ -308,7 +425,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         form = {"display": "flex" if live else "none", "flexDirection": "column",
                 "gap": "6.4px", "padding": "11.2px", "border": f"1px solid {LINE}",
                 "background": "#F8F9FB"}
-        note = {"fontSize": "8.8px", "color": INK4, "lineHeight": 1.5,
+        note = {"fontSize": "11px", "color": INK4, "lineHeight": 1.5,
                 "display": "none" if live else "block"}
         return form, note
 
@@ -384,9 +501,9 @@ def register_extra(app, buffer=None, inference=None) -> None:
              "10 ans (COBAC)" if cfg.get("mode") == "live" else "session"),
         ]
         table = html.Div([
-            html.Div([html.Span(k, style={"fontSize": "10px", "color": INK3}),
+            html.Div([html.Span(k, style={"fontSize": "12.5px", "color": INK3}),
                       html.Span(v, className="mk-num",
-                                style={"fontSize": "9.6px", "fontWeight": 600,
+                                style={"fontSize": "12px", "fontWeight": 600,
                                        "color": DANGER if v in ("LIVE", "DÉCONNECTÉ", "EN PAUSE")
                                        else INK})],
                      style={"display": "flex", "justifyContent": "space-between",
@@ -406,10 +523,10 @@ def register_extra(app, buffer=None, inference=None) -> None:
         return [
             html.Div([
                 html.Div(f"ÉTAPE {idx + 1:02d} · {STAGES[idx][1].upper()}", className="mk-kicker"),
-                html.Div(title, style={"fontSize": "12px", "fontWeight": 600}),
-                html.Div(body, style={"fontSize": "10.4px", "lineHeight": 1.65, "maxWidth": "44ch",
+                html.Div(title, style={"fontSize": "13.4px", "fontWeight": 600}),
+                html.Div(body, style={"fontSize": "13px", "lineHeight": 1.65, "maxWidth": "44ch",
                                       "color": "#3F4650"}),
-                html.Div(code, className="mk-num", style={"fontSize": "9.2px", "color": ACCENT}),
+                html.Div(code, className="mk-num", style={"fontSize": "11.5px", "color": ACCENT}),
             ], style={"display": "flex", "flexDirection": "column", "gap": "9.6px"}),
             dcc.Graph(figure=_stage_figure(sid, inference, buffer), config={"displayModeBar": False},
                       style={"height": "200px"}),
@@ -478,7 +595,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                             "faut au moins une fraude et une transaction légitime scorées. "
                             f"Un compte n'est scoré qu'après {W_MODELE} transactions ; patientez "
                             "quelques instants.",
-                            style={"fontSize": "10.8px", "color": INK4, "maxWidth": "58ch",
+                            style={"fontSize": "13.5px", "color": INK4, "maxWidth": "58ch",
                                    "lineHeight": 1.65})
             empty = _theme(go.Figure(), 192)
             return [], vide, empty, empty, None, None, "", _theme(go.Figure(), 200)
@@ -550,11 +667,11 @@ def register_extra(app, buffer=None, inference=None) -> None:
         ]
         stab = html.Div([
             html.Div([
-                html.Div([html.Div(k, style={"fontSize": "10px", "color": "#3F4650"}),
+                html.Div([html.Div(k, style={"fontSize": "12.5px", "color": "#3F4650"}),
                           html.Div(formula, className="mk-num",
-                                   style={"fontSize": "8.4px", "color": INK4})]),
+                                   style={"fontSize": "10.5px", "color": INK4})]),
                 html.Span("n/d" if v is None else f"{v:.3f}", className="mk-num",
-                          style={"fontSize": "10px", "fontWeight": 600}),
+                          style={"fontSize": "12.5px", "fontWeight": 600}),
                 html.Span(f"PALIER {t}", className=f"tier tier-{t}"),
             ], style={"display": "grid", "gridTemplateColumns": "1fr 59.2px 73.6px",
                       "alignItems": "center", "gap": "9.6px", "padding": "7.2px 0",
@@ -578,7 +695,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         updated = html.Span(
             f"Mis à jour à {_dt.datetime.now().strftime('%H:%M:%S')} · indicateurs ci-dessous "
             f"sur les {len(journal)} dernières décisions étiquetées ({n_lots} lots)." + session,
-            style={"fontSize": "9.6px", "color": INK3, "lineHeight": 1.6})
+            style={"fontSize": "12px", "color": INK3, "lineHeight": 1.6})
         return (kpis, conf, _theme(roc, 192), _theme(cal, 192), dec, stab,
                 updated, _trend_figure(journal, tau))
 
@@ -627,7 +744,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         _audit_last[0] = key
         if not journal:
             return ([], html.Div("Aucune décision enregistrée dans cette session.",
-                                 style={"fontSize": "10.8px", "color": INK4}),
+                                 style={"fontSize": "13.5px", "color": INK4}),
                     "", True, True)
         alerts = sum(1 for j in journal if j["verdict"] == "FRAUDE")
         scored, t_alerts = int(totals.get("scored", 0)), int(totals.get("alerts", 0))
@@ -646,7 +763,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         if not shown:
             body = html.Div("Aucune alerte de fraude dans le journal de cette session."
                             if flt == "alerts" else "Aucune décision à afficher.",
-                            style={"fontSize": "10.8px", "color": INK4})
+                            style={"fontSize": "13.5px", "color": INK4})
         else:
             rows = [[f"{n:03d}", j["time"], j["acct"], f"{j['score']:.3f}",
                      j.get("driver") or ("en attente" if j["score"] > _cb_mod._EXPLAIN_THRESHOLD else ""),
@@ -688,7 +805,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         if buffer is not None and (not acc or buffer.get_window(acc) is None):
             return html.Div("Aucun compte à fenêtre complète pour l'instant : le rapport porte "
                             f"sur le compte inspecté, qui doit avoir reçu {W_MODELE} transactions.",
-                            style={"fontSize": "10.8px", "color": INK4})
+                            style={"fontSize": "13.5px", "color": INK4})
 
         # Contributions réelles : lire depuis le cache serveur (_last_result)
         # plutôt que depuis le dcc.Store réduit (qui ne contient plus gate_contribs)
@@ -726,14 +843,14 @@ def register_extra(app, buffer=None, inference=None) -> None:
             except Exception:
                 gate_rows_html = html.Div(
                     "Données de contribution non disponibles pour cette transaction.",
-                    style={"fontSize": "9.6px", "color": INK4})
+                    style={"fontSize": "12px", "color": INK4})
                 gate_section_title = "2 · Contributions des portes"
                 gate_note = ""
         else:
             gate_rows_html = html.Div(
                 "Aucune transaction scorée dans cette session  soumettez au moins "
                 f"une fenêtre complète (W={W_MODELE}) pour voir les contributions réelles.",
-                style={"fontSize": "9.6px", "color": INK4, "lineHeight": 1.6})
+                style={"fontSize": "12px", "color": INK4, "lineHeight": 1.6})
             gate_section_title = "2 · Contributions des portes"
             gate_note = ""
 
@@ -776,10 +893,10 @@ def register_extra(app, buffer=None, inference=None) -> None:
                     html.Div("Commission bancaire de l'Afrique centrale", className="mk-kicker"),
                     html.H1("Rapport d'auditabilité du modèle de scoring"),
                     html.Div("Établissement déclarant · MKAN / Mobile Money  zone CEMAC",
-                             style={"fontSize": "10px", "color": INK3}),
+                             style={"fontSize": "12.5px", "color": INK3}),
                 ]),
                 html.Div([html.Div(f"{k} {v}", className="mk-num",
-                                   style={"fontSize": "8.8px", "color": INK3})
+                                   style={"fontSize": "11px", "color": INK3})
                           for k, v in [("Réf.", ref),
                                        ("Date", _dt.date.today().strftime("%d/%m/%Y")),
                                        ("Mode", "LIVE" if mode == "live" else "SIMULÉ"),
@@ -797,14 +914,16 @@ def register_extra(app, buffer=None, inference=None) -> None:
 
             html.H2(gate_section_title),
             html.Div(gate_note, className="mk-num",
-                     style={"fontSize": "8.8px", "color": INK4, "marginBottom": "6.4px"}) if gate_note else None,
+                     style={"fontSize": "11px", "color": INK4, "marginBottom": "6.4px"}) if gate_note else None,
             gate_rows_html,
             top_feat_block,
 
-            html.H2("3 · Indicateurs de validation de la session"),
+            *(section_evaluation_memoire(inference.checkpoint_name, 3) if inference is not None else []),
+
+            html.H2("4 · Indicateurs de validation de la session"),
             html.Div([html.Div([html.Span(k, className="mk-kicker"),
                                 html.Span(v, className="mk-num",
-                                          style={"fontSize": "11.2px", "fontWeight": 600})],
+                                          style={"fontSize": "14px", "fontWeight": 600})],
                                style={"display": "flex", "flexDirection": "column", "gap": "3.2px",
                                       "padding": "8.8px 10.4px", "background": "#F8F9FB",
                                       "borderRadius": "5px"})
@@ -812,24 +931,25 @@ def register_extra(app, buffer=None, inference=None) -> None:
                      style={"display": "grid", "gap": "6.4px",
                             "gridTemplateColumns": "repeat(auto-fit, minmax(100.8px, 1fr))"}),
 
-            html.H2("4 · Réserves et limites d'opposabilité"),
-            html.P("4.1  Les contributions rapportées sont extraites de la dernière transaction "
+            html.H2("5 · Réserves et limites d'opposabilité"),
+            html.P("5.1  Les contributions rapportées sont extraites de la dernière transaction "
                    "scorée dans la session. Elles reflètent l'état réel des poids du modèle pour "
                    "cette séquence et ne valent pas extrapolation hors distribution d'entraînement."),
-            html.P("4.2  " + ("Rapport établi en mode LIVE : les décisions horodatées sont "
+            html.P("5.2  " + ("Rapport établi en mode LIVE : les décisions horodatées sont "
                                "opposables et le journal est scellé pour dix ans."
                                if mode == "live" else
                                "Rapport établi en mode SIMULÉ sur données synthétiques  sans "
                                "valeur probante, à usage de recette uniquement.")),
-            html.P("4.3  Un PSI supérieur à 0.2 ou un ECE supérieur à 0.1 suspend la validité du "
+            html.P("5.3  Un PSI supérieur à 0.2 ou un ECE supérieur à 0.1 suspend la validité du "
                    "rapport jusqu'au ré-entraînement du modèle."),
+            *(reserves_memoire(inference.checkpoint_name, 5) if inference is not None else []),
 
             html.Footer([
                 html.Div([
                     html.Div("Empreinte du rapport (SHA-256 tronqué)", className="mk-kicker"),
-                    html.Div(f"sha256:{digest}…", className="mk-num", style={"fontSize": "9.6px"}),
+                    html.Div(f"sha256:{digest}…", className="mk-num", style={"fontSize": "12px"}),
                     html.Div(f"Analyste responsable · {analyst}",
-                             style={"fontSize": "9.6px", "color": INK3}),
+                             style={"fontSize": "12px", "color": INK3}),
                 ]),
                 html.Div(html.Button("Imprimer / PDF", id="btn-print", n_clicks=0,
                                      className="btn btn-primary no-print")),
@@ -913,7 +1033,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
             bar_color = OK if level >= 10 else ACCENT if level >= 5 else INK4
             cards.append(html.Div([
                 html.Div(a[:20], style={
-                    "fontFamily": "var(--mono)", "fontSize": "8.4px",
+                    "fontFamily": "var(--mono)", "fontSize": "10.5px",
                     "fontWeight": 700 if is_active else 400,
                     "color": ACCENT if is_active else INK3,
                     "overflow": "hidden", "textOverflow": "ellipsis", "whiteSpace": "nowrap",
@@ -923,7 +1043,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                     "background": bar_color, "borderRadius": "2px",
                 }), style={"background": "#F3F4F6", "borderRadius": "2px",
                            "height": "2.4px", "margin": "4px 0"}),
-                html.Div(f"{level}/10", style={"fontSize": "8px", "color": INK4,
+                html.Div(f"{level}/10", style={"fontSize": "10px", "color": INK4,
                                                "fontFamily": "var(--mono)"}),
             ], style={
                 "padding": "8px 9.6px", "background": "#fff", "borderRadius": "5px",
@@ -933,7 +1053,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
             grid_content = html.Div(
                 "Aucun compte actif pour l'instant : le flux n'a pas encore livré de "
                 "transactions, ou le scoring est en pause.",
-                style={"fontSize": "10.4px", "color": INK4})
+                style={"fontSize": "13px", "color": INK4})
         else:
             grid_content = html.Div(cards, style={
                 "display": "grid", "gap": "8px",
@@ -955,7 +1075,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                 text=("Aucun compte inspecté pour l'instant." if not acc else
                       f"La fenêtre de {acc} n'est pas encore complète ({W_MODELE} transactions requises)."),
                 xref="paper", yref="paper", x=0.5, y=0.5,
-                showarrow=False, font=dict(color=INK4, size=10.4))
+                showarrow=False, font=dict(color=INK4, size=13))
             fig_heat.update_xaxes(visible=False); fig_heat.update_yaxes(visible=False)
             fig_heat.update_layout(height=272, paper_bgcolor="white", plot_bgcolor="white",
                                    margin=dict(t=16, b=16, l=16, r=16))
@@ -973,7 +1093,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
                 zmin=0, zmax=1,
                 colorscale=[[0, "#EFF6FF"], [0.5, "#60A5FA"], [1, "#1E3A8A"]],
                 colorbar=dict(thickness=12, len=0.85, tickvals=[0, 1],
-                              ticktext=["min", "max"], tickfont=dict(size=8)),
+                              ticktext=["min", "max"], tickfont=dict(size=10)),
                 hovertemplate="<b>%{y}</b><br>%{x}<br>valeur brute : %{customdata:.4g}"
                               "<extra></extra>",
             ))
@@ -999,7 +1119,7 @@ def register_extra(app, buffer=None, inference=None) -> None:
         log_feats = {"delta_B_orig", "delta_B_dest", "r1", "r2", "v1h"}
 
         if inference is None:
-            no_model = html.Div("Modèle non chargé.", style={"color": INK4, "fontSize": "10.4px"})
+            no_model = html.Div("Modèle non chargé.", style={"color": INK4, "fontSize": "13px"})
             return no_model, no_model
 
         # Cache : le modèle ne change jamais en cours de session → calculé une seule fois
@@ -1053,21 +1173,21 @@ def register_extra(app, buffer=None, inference=None) -> None:
                     ))
             fig = go.Figure(traces)
             fig.update_layout(
-                title=dict(text=feat_label, font=dict(size=8.8, color=INK3), x=0.5),
+                title=dict(text=feat_label, font=dict(size=11, color=INK3), x=0.5),
                 height=144,
                 margin=dict(t=22.4, b=22.4, l=28.8, r=6.4),
                 paper_bgcolor="white", plot_bgcolor="white",
-                font=dict(family="IBM Plex Sans, sans-serif", size=8, color=INK),
+                font=dict(family="IBM Plex Sans, sans-serif", size=10, color=INK),
                 showlegend=(feat_i == 0),
-                legend=dict(orientation="h", y=1.28, font=dict(size=7.2)),
+                legend=dict(orientation="h", y=1.28, font=dict(size=9)),
             )
             _tf = dict(family="IBM Plex Mono, monospace", size=8, color=INK3)
             fig.update_xaxes(gridcolor=LINE, zeroline=True, zerolinecolor="#E5E7EB",
                              tickfont=_tf,
-                             title=dict(text="x normalisé", font=dict(size=6.4)))
+                             title=dict(text="x normalisé", font=dict(size=8)))
             fig.update_yaxes(gridcolor=LINE, zeroline=False,
                              tickfont=_tf,
-                             title=dict(text="|φ(x)|", font=dict(size=6.4)))
+                             title=dict(text="|φ(x)|", font=dict(size=8)))
             spline_graphs.append(
                 html.Div(
                     dcc.Graph(figure=fig, config={"displayModeBar": False}),
@@ -1203,7 +1323,7 @@ def _stage_theme(fig: go.Figure) -> go.Figure:
     named = [t for t in fig.data if getattr(t, "name", None) and t.showlegend is not False]
     if len(fig.data) > 1 and named:
         fig.update_layout(showlegend=True,
-                          legend=dict(orientation="h", y=-0.32, x=0, font=dict(size=8)),
+                          legend=dict(orientation="h", y=-0.32, x=0, font=dict(size=10)),
                           margin=dict(t=32, b=51.2, l=41.6, r=12.8))
     else:
         fig.update_layout(margin=dict(t=32, b=32, l=41.6, r=12.8))
@@ -1213,7 +1333,7 @@ def _stage_theme(fig: go.Figure) -> go.Figure:
 def _empty_stage(msg: str) -> go.Figure:
     fig = go.Figure()
     fig.add_annotation(text=msg, xref="paper", yref="paper", x=0.5, y=0.5,
-                       showarrow=False, font=dict(color=INK4, size=9.6))
+                       showarrow=False, font=dict(color=INK4, size=12))
     fig.update_xaxes(visible=False); fig.update_yaxes(visible=False)
     return _stage_theme(fig)
 
@@ -1243,7 +1363,7 @@ def _stage_figure(sid: str, inference, buffer) -> go.Figure:
             hovertemplate="<b>%{y}</b> %{x}<br>valeur brute : %{customdata:.4g}<extra></extra>"))
         fig.update_yaxes(tickfont=MONO)
         fig.update_layout(title=dict(text=f"Fenêtre réelle du compte {acc} (échelle propre à "
-                                          "chaque ligne)", font=dict(size=8.8, color=INK3), x=0))
+                                          "chaque ligne)", font=dict(size=11, color=INK3), x=0))
         return _stage_theme(fig)
 
     if sid == "norm":
@@ -1258,12 +1378,12 @@ def _stage_figure(sid: str, inference, buffer) -> go.Figure:
             x=clipped, y=[FEATURE_LABELS.get(f, f) for f in inference.feature_cols],
             orientation="h", marker_color=[DANGER if o else ACCENT for o in out_of_range],
             text=[f"{v:.2e} · hors échelle" if o else "" for v, o in zip(z, out_of_range)],
-            textposition="outside", textfont=dict(size=7.2, color=DANGER), cliponaxis=False,
+            textposition="outside", textfont=dict(size=9, color=DANGER), cliponaxis=False,
             customdata=[float(v) for v in z],
             hovertemplate="<b>%{y}</b><br>valeur normalisée : %{customdata:.3g}<extra></extra>"))
         fig.update_layout(title=dict(
             text=f"Valeurs réellement fournies au modèle (compte {acc}, transaction la plus "
-                 "récente) ; rouge = hors de l'échelle ±10", font=dict(size=8.8, color=INK3), x=0))
+                 "récente) ; rouge = hors de l'échelle ±10", font=dict(size=11, color=INK3), x=0))
         fig.update_xaxes(title="valeur normalisée (z), tronquée à ±10", range=[-lim * 1.6, lim * 1.6])
         fig.update_yaxes(tickfont=MONO, autorange="reversed")
         return _stage_theme(fig)
@@ -1293,7 +1413,7 @@ def _stage_figure(sid: str, inference, buffer) -> go.Figure:
         fig = go.Figure(traces)
         fig.update_layout(title=dict(text=f"Fonctions apprises des {len(inference.gate_names)} portes pour la variable "
                                           f"« {FEATURE_LABELS.get(var, var)} »",
-                                     font=dict(size=8.8, color=INK3), x=0))
+                                     font=dict(size=11, color=INK3), x=0))
         fig.update_xaxes(title="valeur normalisée x"); fig.update_yaxes(title="|φ(x)| moyen")
         return _stage_theme(fig)
 
@@ -1321,7 +1441,7 @@ def _stage_figure(sid: str, inference, buffer) -> go.Figure:
         fig.update_layout(title=dict(text=f"Les {len(centers)} gaussiennes (centres de "
                                           f"{centers.min():.0f} à {centers.max():.0f}, largeur "
                                           f"h = {h:.3f}) et les harmoniques de Fourier",
-                                     font=dict(size=8.8, color=INK3), x=0))
+                                     font=dict(size=11, color=INK3), x=0))
         fig.update_xaxes(title="valeur normalisée x"); fig.update_yaxes(title="fonction de base")
         return _stage_theme(fig)
 
@@ -1337,7 +1457,7 @@ def _stage_figure(sid: str, inference, buffer) -> go.Figure:
         fig.update_layout(title=dict(text=f"Poids appris de la projection linéaire "
                                           f"(biais b = {b:.3f}) ; rouge = pousse vers la fraude, "
                                           f"vert = vers le normal",
-                                     font=dict(size=8.8, color=INK3), x=0))
+                                     font=dict(size=11, color=INK3), x=0))
         fig.update_yaxes(title="poids")
         return _stage_theme(fig)
 

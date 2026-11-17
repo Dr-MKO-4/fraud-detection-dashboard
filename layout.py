@@ -10,7 +10,11 @@ from dash import dcc, html
 # Fenêtre et cellule du modèle chargé, fixées par app.py avant build_layout()
 W_MODELE = 10
 CELLULE_MODELE = "TKANCell"
-CHECKPOINT_NOM = "mkan_final.pt"
+CHECKPOINT_NOM = "finaliste_gru_dog_dog_dog_s1.pt"
+# Description du modèle chargé (inference.description()), fixée par modele.configurer
+DESCRIPTION_MODELE = {"cellule": "cellule hybride historique (4 portes)", "n_portes": 4, "hidden": 16, "W": 10,
+                      "n_variables": 12, "bases": "gaussiennes M=8 et Fourier K=2 sur toutes les portes",
+                      "regime": "log1p puis z-score"}
 BASES_MODELE = "gaussiennes M=8 + Fourier K=2"
 # Portes affichées dans la vue Modèle : (couleur, libellé), dans l'ordre des courbes
 PORTES_MODELE = [("#0F6FB8", "Porte d'oubli"), ("#2F7D5B", "Porte d'entrée"),
@@ -124,7 +128,7 @@ def _header() -> html.Header:
         html.Div([
             html.Div([
                 html.Img(src="/assets/logo_mkan.png", className="mk-logo", alt="MKAN logo"),
-                html.Span("MKAN", style={"fontSize": "11.2px", "fontWeight": 600}),
+                html.Span("MKAN", style={"fontSize": "14px", "fontWeight": 600}),
                 html.Span("v3.0", className="mk-ver"),
             ], className="mk-brand"),
 
@@ -146,7 +150,7 @@ def _header() -> html.Header:
                 html.Button("AN", id="btn-profile", n_clicks=0, title="Profil analyste",
                             style={"width": "21.6px", "height": "21.6px", "padding": 0,
                                    "border": "1px solid #D0D5DD", "background": "#fff",
-                                   "fontFamily": "var(--mono)", "fontSize": "8.4px",
+                                   "fontFamily": "var(--mono)", "fontSize": "10.5px",
                                    "fontWeight": 600, "cursor": "pointer"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "8px", "flex": "none"}),
         ], className="mk-bar"),
@@ -167,10 +171,10 @@ def _header() -> html.Header:
             html.Div(style={"flex": 1}),
             html.Div([
                 html.Span(f"checkpoint {CHECKPOINT_NOM}", id="lbl-checkpoint",
-                          style={"fontFamily": "var(--mono)", "fontSize": "8.4px",
+                          style={"fontFamily": "var(--mono)", "fontSize": "10.5px",
                                  "color": "var(--ink-4)"}),
                 html.A("Journal d'audit", href="#", id="link-audit",
-                       style={"fontFamily": "var(--mono)", "fontSize": "8.4px"}),
+                       style={"fontFamily": "var(--mono)", "fontSize": "10.5px"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "11.2px",
                       "padding": "0 16px", "borderLeft": "1px solid var(--line-2)"}),
         ], className="mk-telemetry"),
@@ -191,7 +195,7 @@ def _view_scoring() -> html.Div:
                     help="Le dashboard ne fait que lire le flux. La population et le débit "
                          "se règlent côté MoMTSim, au lancement du producteur (run_live.py)."),
             html.Div(id="live-status",
-                     style={"fontSize": "8.8px", "color": "var(--ink-3)",
+                     style={"fontSize": "11px", "color": "var(--ink-3)",
                             "lineHeight": 1.5, "fontFamily": "var(--mono)"}),
         ], style={"display": "flex", "flexDirection": "column", "gap": "6.4px"}),
 
@@ -209,7 +213,7 @@ def _view_scoring() -> html.Div:
                 inline=True,
                 persistence=True, persistence_type="session",
                 labelStyle={
-                    "fontSize": "8.8px", "fontWeight": 700, "cursor": "pointer",
+                    "fontSize": "11px", "fontWeight": 700, "cursor": "pointer",
                     "fontFamily": "var(--mono)",
                     "padding": "3.2px 8px",
                     "border": "1px solid var(--line)",
@@ -222,11 +226,11 @@ def _view_scoring() -> html.Div:
             html.Div([
                 html.Button("▶ Reprendre", id="btn-play", n_clicks=0,
                             className="btn btn-primary",
-                            style={"fontSize": "8.8px", "padding": "4px 11.2px",
+                            style={"fontSize": "11px", "padding": "4px 11.2px",
                                    "fontFamily": "var(--mono)", "fontWeight": 700}),
                 html.Button("⏸ Suspendre", id="btn-pause", n_clicks=0,
                             className="btn btn-secondary",
-                            style={"fontSize": "8.8px", "padding": "4px 11.2px",
+                            style={"fontSize": "11px", "padding": "4px 11.2px",
                                    "fontFamily": "var(--mono)"}),
             ], style={"display": "flex", "gap": "4.8px", "marginTop": "2px"}),
         ], style={"display": "flex", "flexDirection": "column", "gap": "6.4px"}),
@@ -245,7 +249,7 @@ def _view_scoring() -> html.Div:
                 placeholder="automatique",
                 className="form-control",
                 persistence=True, persistence_type="session",
-                style={"textAlign": "left", "padding": "7.2px 8.8px", "fontSize": "10.4px"},
+                style={"textAlign": "left", "padding": "7.2px 8.8px", "fontSize": "13px"},
             ),
         ], style={"display": "flex", "flexDirection": "column", "gap": "4.8px"}),
 
@@ -257,7 +261,7 @@ def _view_scoring() -> html.Div:
                              f"compte n'est scoré qu'une fois les {W} cases remplies ; ensuite "
                              "la fenêtre glisse d'une case à chaque nouvelle transaction."),
                 html.Span(f"0/{W}", id="progress-window", className="mk-num",
-                          style={"fontSize": "9.6px", "fontWeight": 600}),
+                          style={"fontSize": "12px", "fontWeight": 600}),
             ], style={"display": "flex", "justifyContent": "space-between",
                       "alignItems": "baseline"}),
             html.Div([html.Span() for _ in range(W)], id="window-cells",
@@ -279,7 +283,7 @@ def _view_scoring() -> html.Div:
                     title=tooltip,
                     className="btn btn-secondary",
                     style={
-                        "fontSize": "8.4px", "fontFamily": "var(--mono)", "padding": "4.8px 3.2px",
+                        "fontSize": "10.5px", "fontFamily": "var(--mono)", "padding": "4.8px 3.2px",
                         "fontWeight": 600,
                         "borderColor": "#C2334D" if "ANOMALIE" in lbl else "var(--line)",
                         "color": "#C2334D" if "ANOMALIE" in lbl else "var(--ink)",
@@ -315,7 +319,7 @@ def _view_scoring() -> html.Div:
                 html.Div([
                     html.Div(id="verdict-badge"),
                     html.Span(id="verdict-note",
-                              style={"fontSize": "10px", "color": "var(--ink-3)"}),
+                              style={"fontSize": "12.5px", "color": "var(--ink-3)"}),
                 ], style={"display": "flex", "alignItems": "center",
                           "gap": "8px", "flexWrap": "wrap"}),
                 chart_help(
@@ -388,7 +392,7 @@ def _view_window() -> html.Div:
             _kicker("Comptes actifs · une carte par compte"),
             html.Div([
                 html.Div([
-                    html.Div("Filtrer par remplissage", style={"fontSize": "8.8px",
+                    html.Div("Filtrer par remplissage", style={"fontSize": "11px",
                              "color": "var(--ink-3)", "marginBottom": "3.2px"}),
                     dcc.Dropdown(id="win-filter", value="all", clearable=False,
                                  options=[
@@ -399,13 +403,13 @@ def _view_window() -> html.Div:
                 ], style={"minWidth": "208px"}),
                 html.Div([
                     html.Div("Compte à visualiser (carte de chaleur)", style={
-                             "fontSize": "8.8px", "color": "var(--ink-3)", "marginBottom": "3.2px"}),
+                             "fontSize": "11px", "color": "var(--ink-3)", "marginBottom": "3.2px"}),
                     dcc.Dropdown(id="win-account", value=None, clearable=True, options=[],
                                  placeholder="Automatique : compte inspecté, sinon le plus rempli"),
                 ], style={"minWidth": "272px", "flex": "1"}),
             ], style={"display": "flex", "gap": "16px", "flexWrap": "wrap"}),
             html.Div(id="window-summary",
-                     style={"fontSize": "9.6px", "color": "var(--ink-3)",
+                     style={"fontSize": "12px", "color": "var(--ink-3)",
                             "fontFamily": "var(--mono)"}),
             html.Div(id="buffers-grid"),
             chart_help(
@@ -445,14 +449,14 @@ def _view_metrics() -> html.Div:
             html.Div([
                 html.Div([_kicker("Seuil de décision τ"),
                           html.Span("0.500", id="tau-value", className="mk-num",
-                                    style={"fontSize": "10.4px", "fontWeight": 600})],
+                                    style={"fontSize": "13px", "fontWeight": 600})],
                          style={"display": "flex", "justifyContent": "space-between",
                                 "alignItems": "baseline", "gap": "9.6px"}),
                 dcc.Slider(id="slider-tau", min=0.02, max=0.98, step=0.01, value=0.5,
                            marks=None, tooltip={"placement": "bottom"},
                            persistence=True, persistence_type="session"),
                 html.Div(id="tau-note",
-                         style={"fontSize": "9.2px", "color": "var(--ink-4)"}),
+                         style={"fontSize": "11.5px", "color": "var(--ink-4)"}),
             ], style={"display": "flex", "flexDirection": "column",
                       "gap": "5.6px", "minWidth": "192px"}),
         ], style={"display": "flex", "flexWrap": "wrap", "gap": "20.8px",
@@ -555,9 +559,9 @@ def _view_model() -> html.Div:
     stage_buttons = [
         html.Button([
             html.Span(f"{i + 1:02d} {label.upper()}",
-                      style={"fontFamily": "var(--mono)", "fontSize": "7.6px", "color": "var(--ink-4)"}),
-            html.Span(value, style={"fontSize": "11.2px", "fontWeight": 600}),
-            html.Span(detail, style={"fontFamily": "var(--mono)", "fontSize": "8.4px",
+                      style={"fontFamily": "var(--mono)", "fontSize": "9.5px", "color": "var(--ink-4)"}),
+            html.Span(value, style={"fontSize": "14px", "fontWeight": 600}),
+            html.Span(detail, style={"fontFamily": "var(--mono)", "fontSize": "10.5px",
                                      "color": "var(--ink-3)"}),
         ], id={"type": "stage", "index": sid}, n_clicks=0,
             style={"display": "flex", "flexDirection": "column", "gap": "4px",
@@ -619,7 +623,7 @@ def _view_audit() -> html.Div:
                             n_clicks=0, className="btn btn-secondary"),
                 dcc.Download(id="download-journal"),
                 html.Div(id="audit-purge-msg",
-                         style={"fontSize": "9.6px", "flexBasis": "100%", "lineHeight": 1.5}),
+                         style={"fontSize": "12px", "flexBasis": "100%", "lineHeight": 1.5}),
             ], style={"display": "flex", "gap": "6.4px", "flexWrap": "wrap"}),
         ], style={"display": "flex", "justifyContent": "space-between",
                   "alignItems": "flex-end", "gap": "19.2px", "flexWrap": "wrap"}),
@@ -629,7 +633,7 @@ def _view_audit() -> html.Div:
                           id="audit-filter", value="all", inline=True,
                           options=[{"label": "Toutes les décisions", "value": "all"},
                                    {"label": "Alertes seulement", "value": "alerts"}],
-                          labelStyle={"fontSize": "9.2px", "fontWeight": 600,
+                          labelStyle={"fontSize": "11.5px", "fontWeight": 600,
                                       "cursor": "pointer"}),
                       html.Div([
                           html.Button("← Plus récentes", id="audit-prev", n_clicks=0,
@@ -670,7 +674,7 @@ def _bloc_modele() -> html.Div:
         dcc.Dropdown(id="sel-modele", value=CHECKPOINT_NOM, clearable=False, searchable=False,
                      options=[{"label": m["libelle"], "value": m["fichier"]} for m in cat["modeles"]]),
         html.Div(id="modele-statut", className="mk-num",
-                 style={"fontSize": "9.6px", "color": "var(--ink-3)", "lineHeight": 1.6}),
+                 style={"fontSize": "12px", "color": "var(--ink-3)", "lineHeight": 1.6}),
     ], style={"display": "flex", "flexDirection": "column", "gap": "8px", "marginBottom": "16px"})
 
 
@@ -696,7 +700,7 @@ def _view_env() -> html.Div:
                     ],
                     labelStyle={"display": "block", "padding": "11.2px 12.8px",
                                 "border": "1px solid var(--line)", "background": "#fff",
-                                "marginBottom": "6.4px", "fontSize": "10.4px",
+                                "marginBottom": "6.4px", "fontSize": "13px",
                                 "lineHeight": 1.6, "cursor": "pointer"},
                 ),
                 html.Div(id="live-confirm", style={"display": "none"}),
@@ -713,43 +717,43 @@ def _view_env() -> html.Div:
                         {"label": " KAFKA · mm.transactions.momtsim", "value": "kafka"},
                         {"label": " API REST · /live/transactions",   "value": "rest"},
                     ],
-                    labelStyle={"display": "block", "fontSize": "10px",
+                    labelStyle={"display": "block", "fontSize": "12.5px",
                                 "padding": "3.2px 0"}),
                 html.Div(id="source-uri", className="mk-num",
-                         style={"fontSize": "9.2px", "color": "var(--accent)",
+                         style={"fontSize": "11.5px", "color": "var(--accent)",
                                 "wordBreak": "break-all"}),
                 html.Div("Mode démo : ce point de connexion est celui de MoMTSim, il n'est pas "
                          "modifiable.", id="demo-endpoint-note",
-                         style={"fontSize": "8.8px", "color": "var(--ink-4)", "lineHeight": 1.5}),
+                         style={"fontSize": "11px", "color": "var(--ink-4)", "lineHeight": 1.5}),
 
                 html.Div([
                     _kicker("Points de connexion de l'opérateur"),
-                    html.Label("API REST : URL du flux", style={"fontSize": "9.6px"}),
+                    html.Label("API REST : URL du flux", style={"fontSize": "12px"}),
                     dcc.Input(id="inp-rest-url", type="text", debounce=False,
                               placeholder="https://api.operateur.example/v2/transactions",
                               className="form-control", persistence=True,
                               persistence_type="session",
-                              style={"textAlign": "left", "fontSize": "9.6px"}),
+                              style={"textAlign": "left", "fontSize": "12px"}),
                     html.Label("API REST : jeton d'accès (facultatif, non conservé)",
-                               style={"fontSize": "9.6px"}),
+                               style={"fontSize": "12px"}),
                     dcc.Input(id="inp-rest-token", type="password", debounce=False,
                               placeholder="Bearer …", className="form-control",
-                              style={"textAlign": "left", "fontSize": "9.6px"}),
-                    html.Label("Kafka : serveurs (bootstrap)", style={"fontSize": "9.6px"}),
+                              style={"textAlign": "left", "fontSize": "12px"}),
+                    html.Label("Kafka : serveurs (bootstrap)", style={"fontSize": "12px"}),
                     dcc.Input(id="inp-kafka-bootstrap", type="text", debounce=False,
                               placeholder="broker1:9092,broker2:9092",
                               className="form-control", persistence=True,
                               persistence_type="session",
-                              style={"textAlign": "left", "fontSize": "9.6px"}),
-                    html.Label("Kafka : topic", style={"fontSize": "9.6px"}),
+                              style={"textAlign": "left", "fontSize": "12px"}),
+                    html.Label("Kafka : topic", style={"fontSize": "12px"}),
                     dcc.Input(id="inp-kafka-topic", type="text", debounce=False,
                               placeholder="mm.transactions", className="form-control",
                               persistence=True, persistence_type="session",
-                              style={"textAlign": "left", "fontSize": "9.6px"}),
+                              style={"textAlign": "left", "fontSize": "12px"}),
                     html.Button("Se connecter", id="btn-connect-live", n_clicks=0,
                                 className="btn btn-primary"),
                     html.Div(id="live-connect-msg",
-                             style={"fontSize": "9.2px", "lineHeight": 1.5}),
+                             style={"fontSize": "11.5px", "lineHeight": 1.5}),
                     chart_help(
                         "Le contrat de données que le flux doit respecter.",
                         "Chaque transaction doit fournir : step (entier croissant, 1 = 1 heure), "
@@ -775,7 +779,7 @@ def _view_env() -> html.Div:
             html.Div([
                 _kicker("Arrêt d'urgence"),
                 html.Div("Coupe l'ingestion et gèle le journal en l'état pour instruction.",
-                         style={"fontSize": "10px", "color": "var(--ink-3)",
+                         style={"fontSize": "12.5px", "color": "var(--ink-3)",
                                 "lineHeight": 1.6}),
                 html.Button("Suspendre le scoring", id="btn-kill", n_clicks=0,
                             className="btn btn-danger"),
@@ -800,10 +804,10 @@ def _view_profile() -> html.Div:
 
 def _view_login() -> html.Div:
     _field = lambda lbl, id_, type_: html.Div([
-        html.Label(lbl, style={"fontSize": "9.6px", "color": "var(--ink-3)",
+        html.Label(lbl, style={"fontSize": "12px", "color": "var(--ink-3)",
                                "marginBottom": "3.2px", "display": "block"}),
         dcc.Input(id=id_, type=type_, debounce=True, className="form-control",
-                  style={"fontSize": "10.4px", "padding": "7.2px 8.8px", "width": "100%"}),
+                  style={"fontSize": "13px", "padding": "7.2px 8.8px", "width": "100%"}),
     ], style={"display": "flex", "flexDirection": "column"})
 
     login_form = html.Div([
@@ -812,17 +816,17 @@ def _view_login() -> html.Div:
         _field("Mot de passe", "login-password", "password"),
         html.Button("Se connecter", id="btn-login", n_clicks=0,
                     className="btn btn-primary",
-                    style={"marginTop": "3.2px", "width": "100%", "fontSize": "10.4px",
+                    style={"marginTop": "3.2px", "width": "100%", "fontSize": "13px",
                            "padding": "8px"}),
         html.Div(id="login-msg",
-                 style={"fontSize": "9.2px", "color": "#C2334D",
+                 style={"fontSize": "11.5px", "color": "#C2334D",
                         "fontFamily": "var(--mono)", "minHeight": "14.4px"}),
         html.Div([
             html.Div("Compte de démo préchargé :", className="mk-kicker"),
             html.Div("georgesmoukoko4@gmail.com", className="mk-num",
-                     style={"fontSize": "8.8px", "color": "var(--accent)"}),
+                     style={"fontSize": "11px", "color": "var(--accent)"}),
             html.Div("Mot de passe : demo1234", className="mk-num",
-                     style={"fontSize": "8.8px", "color": "var(--ink-4)"}),
+                     style={"fontSize": "11px", "color": "var(--ink-4)"}),
         ], style={"padding": "8px 9.6px", "background": "var(--surface-2)",
                   "border": "1px solid var(--line)"}),
     ], style={"display": "flex", "flexDirection": "column", "gap": "9.6px",
@@ -836,20 +840,20 @@ def _view_login() -> html.Div:
         _field("Mot de passe", "signup-password", "password"),
         html.Button("Créer le compte", id="btn-signup", n_clicks=0,
                     className="btn btn-secondary",
-                    style={"marginTop": "3.2px", "width": "100%", "fontSize": "10.4px",
+                    style={"marginTop": "3.2px", "width": "100%", "fontSize": "13px",
                            "padding": "8px"}),
         html.Div(id="signup-msg",
-                 style={"fontSize": "9.2px", "fontFamily": "var(--mono)", "minHeight": "14.4px"}),
+                 style={"fontSize": "11.5px", "fontFamily": "var(--mono)", "minHeight": "14.4px"}),
     ], style={"display": "flex", "flexDirection": "column", "gap": "9.6px",
               "padding": "19.2px", "border": "1px solid var(--line)", "background": "#fff",
               "minWidth": 0})
 
     return html.Div([
         html.Div([
-            html.Div("MKAN", style={"fontSize": "17.6px", "fontWeight": 700,
+            html.Div("MKAN", style={"fontSize": "19.7px", "fontWeight": 700,
                                     "fontFamily": "var(--mono)"}),
             html.Div("Système de détection de fraude mobile money · Zone CEMAC",
-                     style={"fontSize": "10.4px", "color": "var(--ink-4)", "marginTop": "3.2px"}),
+                     style={"fontSize": "13px", "color": "var(--ink-4)", "marginTop": "3.2px"}),
         ], style={"marginBottom": "25.6px"}),
         html.Div([login_form, signup_form],
                  style={"display": "grid", "gap": "19.2px",
@@ -862,19 +866,19 @@ def _view_login() -> html.Div:
 def _view_aide() -> html.Div:
     def _sec(title, *items):
         return html.Div([
-            html.H3(title, style={"fontSize":"11.2px","fontWeight":700,"marginBottom":"6.4px",
+            html.H3(title, style={"fontSize":"14px","fontWeight":700,"marginBottom":"6.4px",
                                    "paddingBottom":"4px","borderBottom":"1px solid var(--line)",
                                    "color":"var(--ink)"}),
             *items,
         ], style={"marginBottom":"22.4px"})
     def _p(txt):
-        return html.P(txt, style={"fontSize":"10px","color":"#3F4650","lineHeight":1.7,
+        return html.P(txt, style={"fontSize":"12.5px","color":"#3F4650","lineHeight":1.7,
                                    "maxWidth":"74ch","margin":"0 0 6.4px 0"})
     def _kv(k, v):
         return html.Div([
-            html.Span(k, style={"fontFamily":"var(--mono)","fontSize":"8.4px","fontWeight":700,
+            html.Span(k, style={"fontFamily":"var(--mono)","fontSize":"10.5px","fontWeight":700,
                                   "color":"var(--accent)","minWidth":"160px","flex":"none"}),
-            html.Span(v, style={"fontSize":"9.6px","color":"#3F4650","lineHeight":1.6}),
+            html.Span(v, style={"fontSize":"12px","color":"#3F4650","lineHeight":1.6}),
         ], style={"display":"flex","gap":"12.8px","padding":"4px 0",
                   "borderBottom":"1px solid var(--line-2)"})
     def _box(*items):
@@ -885,10 +889,10 @@ def _view_aide() -> html.Div:
     return html.Div([
         html.Div([
             html.H2("Guide utilisateur  MKAN Dashboard v3.0",
-                    style={"fontSize":"15.2px","fontWeight":700,"marginBottom":"3.2px"}),
+                    style={"fontSize":"17px","fontWeight":700,"marginBottom":"3.2px"}),
             html.P("Système de détection de fraude mobile money · Zone CEMAC · "
                    f"Modèle {CELLULE_MODELE} récurrent · Fenêtre glissante W={W_MODELE} · 12 features",
-                   style={"fontSize":"10.4px","color":"var(--ink-3)","marginBottom":"22.4px"}),
+                   style={"fontSize":"13px","color":"var(--ink-3)","marginBottom":"22.4px"}),
         ]),
 
         _sec("1 · Démarrage rapide",
@@ -896,15 +900,15 @@ def _view_aide() -> html.Div:
                "brutes produites par MoMTSim. Pour obtenir des scores :"),
             html.Ol([
                 html.Li("Démarrer le producteur MoMTSim (voir LANCEMENT.md). La population et le débit "
-                        "se règlent là-bas, jamais dans le dashboard.", style={"fontSize":"10px","lineHeight":1.7,"marginBottom":"3.2px"}),
+                        "se règlent là-bas, jamais dans le dashboard.", style={"fontSize":"12.5px","lineHeight":1.7,"marginBottom":"3.2px"}),
                 html.Li("Ouvrir l'onglet Scoring live. Le scoring démarre tout seul dès que le flux est "
-                        "connecté : l'indicateur en haut à droite passe à « Scoring en cours ».", style={"fontSize":"10px","lineHeight":1.7,"marginBottom":"3.2px"}),
+                        "connecté : l'indicateur en haut à droite passe à « Scoring en cours ».", style={"fontSize":"12.5px","lineHeight":1.7,"marginBottom":"3.2px"}),
                 html.Li(f"Un compte est scoré dès qu'il a reçu {W_MODELE} transactions (fenêtre glissante). La jauge "
                         "et les contributions expliquent le compte inspecté : celui que vous saisissez, "
-                        "sinon celui au score le plus élevé du dernier lot.", style={"fontSize":"10px","lineHeight":1.7,"marginBottom":"3.2px"}),
+                        "sinon celui au score le plus élevé du dernier lot.", style={"fontSize":"12.5px","lineHeight":1.7,"marginBottom":"3.2px"}),
                 html.Li("Choisir le transport (REST ou Kafka) dans l'onglet Environnement. ⏸ Suspendre gèle "
                         "l'affichage sans perdre le flux : il sera scoré à la reprise.",
-                        style={"fontSize":"10px","lineHeight":1.7}),
+                        style={"fontSize":"12.5px","lineHeight":1.7}),
             ], style={"paddingLeft":"16px","margin":"6.4px 0 9.6px 0"}),
             _p("Redis est optionnel. Sans Redis, les fenêtres sont en mémoire et se vident au redémarrage du serveur."),
         ),
@@ -921,9 +925,9 @@ def _view_aide() -> html.Div:
 
         _sec(f"3 · Fenêtre glissante W={W_MODELE}",
             _p(f"Le MKAN ne score pas une transaction isolée mais une séquence de {W_MODELE} transactions "
-               "pour un compte donné. Le scoring ne démarre qu'une fois les 10 cases remplies."),
+               f"pour un compte donné. Le scoring ne démarre qu'une fois les {W_MODELE} cases remplies."),
             _box(
-                _kv("Routage multi-comptes", "Chaque transaction est routée vers la fenêtre de son compte émetteur (nameOrig). Le scoring s'exécute sur TOUS les comptes : dès qu'une fenêtre atteint 10, le modèle score ce compte."),
+                _kv("Routage multi-comptes", f"Chaque transaction est routée vers la fenêtre de son compte émetteur (nameOrig). Le scoring s'exécute sur TOUS les comptes : dès qu'une fenêtre atteint {W_MODELE}, le modèle score ce compte."),
                 _kv("Compte inspecté", "Le champ « Compte inspecté » (vide = automatique) désigne le compte expliqué en détail. La jauge, les contributions, la fenêtre glissante du panneau latéral et la vue Fenêtres portent sur ce compte. En automatique, c'est le dernier compte scoré du dernier lot, alerté ou non."),
                 _kv("Injection de scénario", "Ajoute une transaction synthétique à la fenêtre du compte inspecté puis la re-score. Utile pour tester la réaction du modèle à un type de fraude."),
                 _kv("Vue Fenêtres", "Affiche les 48 comptes les plus remplis (le compte inspecté en premier) et la fenêtre du compte inspecté sous forme de carte de chaleur."),
@@ -963,19 +967,21 @@ def _view_aide() -> html.Div:
                 _kv("ECE", "Expected Calibration Error  écart score prédit / fréquence observée. < 0.05 = bien calibré"),
                 _kv("PSI", "Population Stability Index. > 0.10 : surveillance · > 0.20 : re-entraînement requis"),
                 _kv("Divergence JS", "Jensen-Shannon (moitié 1 vs 2 des scores). > 0.05 : dérive détectée"),
-                _kv("Seuil τ", "Modifiable (0.02–0.98). τ > 0.5 : moins de faux positifs · τ < 0.5 : plus de rappel"),
+                _kv("Seuil τ", "Modifiable (0.02–0.98). τ > 0.5 : moins de faux positifs · τ < 0.5 : plus de rappel. Le flux simulé contient environ 20 % de fraude ; à une proportion réelle de l'ordre de 0,1 %, τ = 0,5 donnerait une majorité de fausses alertes (mémoire, précision attendue de l'ordre de 0,09) : à recalibrer avant tout usage réel."),
                 _kv("Palier 1", "Informatif · Palier 2 : investigation · Palier 3 : action (ré-entraînement)"),
             ),
         ),
 
         _sec("7 · Modèle MKAN (onglet Modèle)",
             _box(
+                _kv("Modèle chargé", f"{CHECKPOINT_NOM} : {DESCRIPTION_MODELE['cellule']}, choisi dans la vue Environnement"),
                 _kv("Architecture", f"{CELLULE_MODELE} récurrente × W={W_MODELE} pas + projection linéaire → σ"),
-                _kv("Entrée", f"(batch, {W_MODELE}, 12)  {W_MODELE} pas de temps × 12 features"),
-                _kv("Normalisation", "log1p(|x|) sur 5 features à queue lourde, puis z-score μ/σ entraînement"),
-                _kv("Portes", "4 portes LSTM (oubli / entrée / candidat / sortie) chacune remplacée par HybridKANLayer"),
-                _kv("Base KAN", "M=8 Gaussiennes RBF + K=2 harmoniques Fourier = 10 paramètres par arête"),
-                _kv("hidden_size=16", "16 nœuds cachés par porte"),
+                _kv("Entrée", f"(batch, {W_MODELE}, {DESCRIPTION_MODELE['n_variables']})  {W_MODELE} pas de temps × "
+                              f"{DESCRIPTION_MODELE['n_variables']} variables"),
+                _kv("Normalisation", f"Régime {DESCRIPTION_MODELE['regime']}, statistiques du jeu d'entraînement relues dans le checkpoint"),
+                _kv("Portes", f"{DESCRIPTION_MODELE['n_portes']} portes, chacune une couche KAN"),
+                _kv("Bases KAN", DESCRIPTION_MODELE["bases"]),
+                _kv("Dimension cachée", f"{DESCRIPTION_MODELE['hidden']} unités"),
                 _kv("Sortie", "z = w⊤h_W + b → score = σ(z)"),
                 _kv("Graphe splines", "|φ(x)| moyen par porte pour chaque feature  une courbe plate = feature peu utilisée"),
                 _kv("Tableau normalisation", f"μ et σ du jeu d'entraînement extraits du checkpoint {CHECKPOINT_NOM}"),
@@ -1012,9 +1018,9 @@ def _view_aide() -> html.Div:
 
         html.Div([
             html.Span("MKAN Dashboard v3.0 · MOUKOKO EKAMBI Georges Miguel · ENSPD / Université de Douala · laboratoire GISDIA · 2026",
-                      style={"fontSize":"8.4px","color":"var(--ink-4)","fontFamily":"var(--mono)"}),
+                      style={"fontSize":"10.5px","color":"var(--ink-4)","fontFamily":"var(--mono)"}),
             html.Span(" · Non implémenté dans cette version : connexion à un flux réel d'opérateur (seul le flux MoMTSim est branché).",
-                      style={"fontSize":"8.4px","color":"var(--ink-4)","fontFamily":"var(--mono)"}),
+                      style={"fontSize":"10.5px","color":"var(--ink-4)","fontFamily":"var(--mono)"}),
         ], style={"borderTop":"1px solid var(--line)","paddingTop":"11.2px","marginTop":"6.4px"}),
 
     ], style={"maxWidth":"688px"})
