@@ -51,6 +51,14 @@ def _build_campaign_model(spec: dict, input_size: int) -> torch.nn.Module:
     from lstm_cell import ConfigurableMKANScorer
     from gru_cell import GRUMKANScorer
     gate_bases, gate_kwargs = _build_gate_bases(spec["cell_type"], spec["base_by_gate"])
+    # Réglages de base par porte (GRU FasterKAN/FasterKAN/DoG, modèle retenu) : même règle que train_run.build_model
+    for gate_canon, kw in (spec.get("gate_kwargs_by_gate") or {}).items():
+        from niveau1_benchmark_run import GATE_TO_NIVEAU1_KEY
+        from niveau1_harness import GRU_GATE_MAP
+        cle = GATE_TO_NIVEAU1_KEY[gate_canon]
+        cle = GRU_GATE_MAP.get(cle) if spec["cell_type"] == "gru" else cle
+        if cle is not None:
+            gate_kwargs[cle] = {**gate_kwargs.get(cle, {}), **kw}
     cls = ConfigurableMKANScorer if spec["cell_type"] == "lstm" else GRUMKANScorer
     return cls(input_size, spec["hidden_size"], gate_bases=gate_bases,
                gate_kwargs=gate_kwargs or None)
@@ -325,7 +333,8 @@ class MKANInference:
     def description(self) -> dict:
         """Description du modèle réellement chargé, pour le rapport COBAC et la vue Modèle."""
         noms = {"relukan": "ReLU-KAN", "wavkan_dog": "ondelette DoG", "efficientkan": "B-spline",
-                "wavkan_morlet": "ondelette de Morlet", "linear": "linéaire", "hybrid": "hybride gaussienne-Fourier"}
+                "wavkan_morlet": "ondelette de Morlet", "linear": "linéaire", "hybrid": "hybride gaussienne-Fourier",
+                "fasterkan": "FasterKAN"}
         portes = {"Forget": "oubli", "Input": "entrée", "Candidate": "candidat", "Output": "sortie"}
         if self.cell_type == "gru":
             portes = {"Forget": "reset", "Input": "update", "Candidate": "candidat"}
